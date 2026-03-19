@@ -1,0 +1,415 @@
+import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { Platform } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as WebBrowser from "expo-web-browser";
+import * as Google from "expo-auth-session/providers/google";
+import * as Notifications from "expo-notifications";
+import * as Device from "expo-device";
+import Constants from "expo-constants";
+import { getApiUrl } from "@/lib/query-client";
+
+WebBrowser.maybeCompleteAuthSession();
+
+interface User {
+  id: string;
+  email: string;
+  userId: string;
+  emailVerified: boolean;
+  credits: number;
+  subscriptionStatus: string;
+  subscriptionPlan: string | null;
+  subscriptionExpiresAt?: string;
+  adsWatchedToday?: number;
+  referralCode?: string;
+}
+
+interface OAuthConfig {
+  enabled: boolean;
+  googleWebClientId?: string;
+  googleIosClientId?: string;
+  googleAndroidClientId?: string;
+}
+
+interface AuthContextType {
+  user: User | null;
+  token: string | null;
+  isLoading: boolean;
+  isAuthenticated: boolean;
+  isEmailVerified: boolean;
+  isGoogleAuthEnabled: boolean;
+  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  register: (email: string, password: string, referralCode?: string) => Promise<{ success: boolean; error?: string }>;
+  loginWithGoogle: () => Promise<{ success: boolean; error?: string }>;
+  logout: () => Promise<void>;
+  refreshUser: () => Promise<void>;
+  updateCredits: (newBalance: number) => void;
+  verifyEmail: (code: string) => Promise<{ success: boolean; error?: string }>;
+  resendVerification: () => Promise<{ success: boolean; error?: string }>;
+}
+
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+const AUTH_TOKEN_KEY = "@ai_storiz_auth_token";
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [oauthConfig, setOauthConfig] = useState<OAuthConfig>({ enabled: false });
+  const [oauthConfigLoaded, setOauthConfigLoaded] = useState(false);
+  const promptAsyncRef = React.useRef<(() => Promise<any>) | null>(null);
+
+  useEffect(() => {
+    loadStoredAuth();
+    loadOAuthConfig();
+  }, []);
+
+  async function loadOAuthConfig() {
+    try {
+      const response = await fetch(new URL("/api/oauth-config", getApiUrl()).toString());
+      if (response.ok) {
+        const config = await response.json();
+        setOauthConfig(config);
+      }
+    } catch (error) {
+      console.error("Failed to load OAuth config:", error);
+    } finally {
+      setOauthConfigLoaded(true);
+    }
+  }
+
+  async function loadStoredAuth() {
+    try {
+      const storedToken = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
+      if (storedToken) {
+        setToken(storedToken);
+        await fetchUser(storedToken);
+      }
+    } catch (error) {
+      console.error("Failed to load stored auth:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function fetchUser(authToken: string) {
+    try {
+      const response = await fetch(new URL("/api/auth/me", getApiUrl()).toString(), {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      
+      if (response.ok) {
+        const userData = await response.json();
+        setUser(userData);
+      } else {
+        await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
+        setToken(null);
+        setUser(null);
+      }
+    } catch (error) {
+      console.error("Failed to fetch user:", error);
+    }
+  }
+
+  async function registerPushToken(authToken: string) {
+    try {
+      if (!Device.isDevice) {
+        console.log("Push notifications not available in simulator");
+        return;
+      }
+
+      // Skip push notifications in Expo Go (not supported in SDK 53+)
+      const isExpoGo = Constants.appOwnership === "expo";
+      if (isExpoGo && Platform.OS === "android") {
+        console.log("Push notifications not available in Expo Go on Android");
+        return;
+      }
+
+      const { status: existingStatus } = await Notifications.getPermissionsAsync();
+      let finalStatus = existingStatus;
+      
+      if (existingStatus !== "granted") {
+        const { status } = await Notifications.requestPermissionsAsync();
+        finalStatus = status;
+      }
+      
+      if (finalStatus !== "granted") {
+        console.log("Push notification permission not granted");
+        return;
+      }
+
+      const projectId = Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
+      if (!projectId) {
+        console.log("No project ID found for push notifications");
+        return;
+      }
+
+      const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
+      const pushToken = tokenData.data;
+
+      await fetch(new URL("/api/notifications/register-token", getApiUrl()).toString(), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          token: pushToken,
+          platform: Platform.OS,
+        }),
+      });
+      
+      console.log("Push token registered successfully");
+    } catch (error) {
+      console.error("Failed to register push token:", error);
+    }
+  }
+
+  async function login(email: string, password: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const response = await fetch(new URL("/api/auth/login", getApiUrl()).toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        await AsyncStorage.setItem(AUTH_TOKEN_KEY, data.token);
+        setToken(data.token);
+        setUser(data.user);
+        registerPushToken(data.token);
+        return { success: true };
+      } else {
+        return { success: false, error: data.error || "Login failed" };
+      }
+    } catch (error: any) {
+      return { success: false, error: error.message || "Network error" };
+    }
+  }
+
+  async function register(email: string, password: string, referralCode?: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const response = await fetch(new URL("/api/auth/register", getApiUrl()).toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password, referralCode: referralCode?.trim() || undefined }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        await AsyncStorage.setItem(AUTH_TOKEN_KEY, data.token);
+        setToken(data.token);
+        setUser(data.user);
+        registerPushToken(data.token);
+        return { success: true };
+      } else {
+        return { success: false, error: data.error || "Registration failed" };
+      }
+    } catch (error: any) {
+      return { success: false, error: error.message || "Network error" };
+    }
+  }
+
+  async function loginWithGoogle(): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!oauthConfig.enabled) {
+        return { success: false, error: "Google Sign-In is not configured" };
+      }
+
+      if (!promptAsyncRef.current) {
+        return { success: false, error: "Google Sign-In is still loading. Please try again." };
+      }
+      const result = await promptAsyncRef.current();
+      
+      if (result?.type !== "success") {
+        return { success: false, error: result?.type === "cancel" ? "Login cancelled" : "Google login failed" };
+      }
+      
+      const { id_token, access_token } = result.params;
+      
+      // Send token to backend for verification
+      const response = await fetch(new URL("/api/auth/google", getApiUrl()).toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          idToken: id_token,
+          accessToken: access_token 
+        }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        await AsyncStorage.setItem(AUTH_TOKEN_KEY, data.token);
+        setToken(data.token);
+        setUser(data.user);
+        registerPushToken(data.token);
+        return { success: true };
+      } else {
+        return { success: false, error: data.error || "Google login failed" };
+      }
+    } catch (error: any) {
+      console.error("Google login error:", error);
+      return { success: false, error: error.message || "Google login failed" };
+    }
+  }
+
+  async function logout() {
+    try {
+      if (token) {
+        await fetch(new URL("/api/auth/logout", getApiUrl()).toString(), {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      }
+    } catch (error) {
+      console.error("Logout request failed:", error);
+    }
+    
+    await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
+    setToken(null);
+    setUser(null);
+  }
+
+  async function refreshUser() {
+    if (token) {
+      await fetchUser(token);
+    }
+  }
+
+  function updateCredits(newBalance: number) {
+    if (user) {
+      setUser({ ...user, credits: newBalance });
+    }
+  }
+
+  async function verifyEmail(code: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const url = new URL("/api/auth/verify-email", getApiUrl()).toString();
+      
+      // Get token from storage to avoid stale closure issues
+      const currentToken = token || await AsyncStorage.getItem(AUTH_TOKEN_KEY);
+      
+      if (!currentToken) {
+        return { success: false, error: "Not authenticated. Please log in again." };
+      }
+      
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${currentToken}`,
+        },
+        body: JSON.stringify({ code }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        if (user) {
+          setUser({ ...user, emailVerified: true });
+        }
+        return { success: true };
+      } else {
+        return { success: false, error: data.error || "Verification failed" };
+      }
+    } catch (error: any) {
+      console.error("Verify email error:", error);
+      return { success: false, error: "Unable to connect to server. Please check your internet connection." };
+    }
+  }
+
+  async function resendVerification(): Promise<{ success: boolean; error?: string }> {
+    try {
+      // Get token from storage to avoid stale closure issues
+      const currentToken = token || await AsyncStorage.getItem(AUTH_TOKEN_KEY);
+      
+      if (!currentToken) {
+        return { success: false, error: "Not authenticated. Please log in again." };
+      }
+      
+      const response = await fetch(new URL("/api/auth/resend-verification", getApiUrl()).toString(), {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${currentToken}`,
+        },
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        return { success: true };
+      } else {
+        return { success: false, error: data.error || "Failed to resend code" };
+      }
+    } catch (error: any) {
+      return { success: false, error: error.message || "Network error" };
+    }
+  }
+
+  const hasRequiredClientId = () => {
+    if (!oauthConfig.enabled) return false;
+    if (Platform.OS === 'android') return !!oauthConfig.googleAndroidClientId;
+    if (Platform.OS === 'ios') return !!oauthConfig.googleIosClientId;
+    return !!oauthConfig.googleWebClientId;
+  };
+
+  return (
+    <AuthContext.Provider
+      value={{
+        user,
+        token,
+        isLoading,
+        isAuthenticated: !!user,
+        isEmailVerified: user?.emailVerified ?? false,
+        isGoogleAuthEnabled: oauthConfig.enabled,
+        login,
+        register,
+        loginWithGoogle,
+        logout,
+        refreshUser,
+        updateCredits,
+        verifyEmail,
+        resendVerification,
+      }}
+    >
+      {oauthConfigLoaded && hasRequiredClientId() ? (
+        <GoogleAuthInitializer
+          config={{
+            webClientId: oauthConfig.googleWebClientId || "",
+            iosClientId: oauthConfig.googleIosClientId || undefined,
+            androidClientId: oauthConfig.googleAndroidClientId || undefined,
+          }}
+          promptAsyncRef={promptAsyncRef}
+        />
+      ) : null}
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+function GoogleAuthInitializer({ config, promptAsyncRef }: {
+  config: { webClientId: string; iosClientId?: string; androidClientId?: string };
+  promptAsyncRef: React.MutableRefObject<(() => Promise<any>) | null>;
+}) {
+  const [, , promptAsync] = Google.useAuthRequest(config);
+
+  useEffect(() => {
+    promptAsyncRef.current = promptAsync;
+    return () => { promptAsyncRef.current = null; };
+  }, [promptAsync, promptAsyncRef]);
+
+  return null;
+}
+
+export function useAuth() {
+  const context = useContext(AuthContext);
+  if (context === undefined) {
+    throw new Error("useAuth must be used within an AuthProvider");
+  }
+  return context;
+}

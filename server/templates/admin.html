@@ -1,0 +1,2928 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Storiz - Admin Dashboard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .container {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      width: 100%;
+      max-width: 900px;
+      margin: 0 auto;
+      overflow: hidden;
+    }
+    .header {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: white;
+      padding: 24px;
+      text-align: center;
+    }
+    .header h1 { font-size: 24px; margin-bottom: 4px; }
+    .header p { opacity: 0.7; font-size: 14px; }
+    .content { padding: 24px; }
+    
+    /* Login Form */
+    #login-section { display: block; max-width: 400px; margin: 0 auto; }
+    #dashboard-section { display: none; }
+    .form-group { margin-bottom: 20px; }
+    .form-group label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #333;
+    }
+    .form-group input, .form-group select {
+      width: 100%;
+      padding: 12px 16px;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 16px;
+      transition: border-color 0.2s;
+    }
+    .form-group input:focus, .form-group select:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    .btn {
+      padding: 14px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.1s, opacity 0.2s;
+    }
+    .btn:active { transform: scale(0.98); }
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      width: 100%;
+    }
+    .btn-primary:hover { opacity: 0.9; }
+    .error {
+      background: #fee;
+      color: #c00;
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      display: none;
+    }
+    .success {
+      background: #efe;
+      color: #060;
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      display: none;
+    }
+    
+    /* Tabs */
+    .tabs {
+      display: flex;
+      border-bottom: 2px solid #e0e0e0;
+      margin-bottom: 24px;
+      overflow-x: auto;
+    }
+    .tab {
+      padding: 12px 20px;
+      cursor: pointer;
+      font-weight: 600;
+      color: #666;
+      border-bottom: 3px solid transparent;
+      margin-bottom: -2px;
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+    .tab:hover { color: #333; }
+    .tab.active {
+      color: #667eea;
+      border-bottom-color: #667eea;
+    }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    
+    /* Stats Cards */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .stat-card {
+      background: linear-gradient(135deg, #f8f9fa 0%, #fff 100%);
+      border: 2px solid #e0e0e0;
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 32px;
+      font-weight: 700;
+      color: #667eea;
+    }
+    .stat-label {
+      font-size: 13px;
+      color: #666;
+      margin-top: 4px;
+    }
+    
+    /* Provider Cards */
+    .provider-card {
+      border: 2px solid #e0e0e0;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+      transition: border-color 0.2s;
+    }
+    .provider-card.default { border-color: #667eea; background: #f8f7ff; }
+    .provider-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .provider-name { font-weight: 600; font-size: 16px; }
+    .provider-desc { font-size: 13px; color: #666; margin-bottom: 12px; }
+    .status-badge {
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .status-enabled { background: #d4edda; color: #155724; }
+    .status-disabled { background: #f8d7da; color: #721c24; }
+    .default-badge {
+      background: #667eea;
+      color: white;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-left: 8px;
+    }
+    .api-key-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .api-key-row input {
+      flex: 1;
+      padding: 10px 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    .btn-small {
+      padding: 10px 16px;
+      font-size: 13px;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .btn-save { background: #667eea; color: white; }
+    .btn-default { background: #28a745; color: white; }
+    .btn-default:disabled { background: #ccc; cursor: not-allowed; }
+    .btn-danger { background: #dc3545; color: white; }
+    .toggle-container {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .toggle {
+      width: 48px;
+      height: 26px;
+      background: #ccc;
+      border-radius: 13px;
+      position: relative;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .toggle.active { background: #28a745; }
+    .toggle::after {
+      content: '';
+      position: absolute;
+      width: 22px;
+      height: 22px;
+      background: white;
+      border-radius: 50%;
+      top: 2px;
+      left: 2px;
+      transition: left 0.2s;
+    }
+    .toggle.active::after { left: 24px; }
+    .info-box {
+      background: #e7f3ff;
+      border: 1px solid #b3d7ff;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 20px;
+      font-size: 13px;
+      color: #004085;
+    }
+    .logout-link {
+      display: block;
+      text-align: center;
+      color: #666;
+      text-decoration: none;
+      margin-top: 16px;
+      font-size: 14px;
+    }
+    .logout-link:hover { color: #333; }
+    
+    /* Models Section */
+    .models-section {
+      background: #f8f9fa;
+      border-radius: 8px;
+      padding: 12px;
+      margin-top: 12px;
+    }
+    .models-section-title {
+      font-weight: 600;
+      font-size: 13px;
+      color: #333;
+      margin-bottom: 10px;
+    }
+    .model-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid #e0e0e0;
+    }
+    .model-row:last-child { border-bottom: none; }
+    .model-info { flex: 1; }
+    .model-name { font-size: 13px; font-weight: 600; color: #333; }
+    .model-cost { font-size: 11px; color: #666; }
+    .model-controls { display: flex; align-items: center; gap: 8px; }
+    .toggle-small {
+      width: 36px;
+      height: 20px;
+      background: #ccc;
+      border-radius: 10px;
+      position: relative;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .toggle-small.active { background: #28a745; }
+    .toggle-small::after {
+      content: '';
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      background: white;
+      border-radius: 50%;
+      top: 2px;
+      left: 2px;
+      transition: left 0.2s;
+    }
+    .toggle-small.active::after { left: 18px; }
+    .default-radio {
+      width: 16px;
+      height: 16px;
+      border: 2px solid #667eea;
+      border-radius: 50%;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .default-radio.selected::after {
+      content: '';
+      width: 8px;
+      height: 8px;
+      background: #667eea;
+      border-radius: 50%;
+    }
+    
+    /* Credit Settings */
+    .settings-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+    }
+    .setting-card {
+      background: #f8f9fa;
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .setting-card h4 {
+      font-size: 14px;
+      color: #333;
+      margin-bottom: 12px;
+    }
+    .setting-input {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    .setting-input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    .setting-help {
+      font-size: 11px;
+      color: #666;
+      margin-top: 6px;
+    }
+    
+    /* Users Table */
+    .users-table-container {
+      overflow-x: auto;
+    }
+    .users-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    .users-table th, .users-table td {
+      padding: 12px;
+      text-align: left;
+      border-bottom: 1px solid #e0e0e0;
+    }
+    .users-table th {
+      background: #f8f9fa;
+      font-weight: 600;
+      color: #333;
+    }
+    .users-table tr:hover {
+      background: #f8f9fa;
+    }
+    .user-email {
+      font-weight: 500;
+      color: #333;
+    }
+    .user-id {
+      font-size: 12px;
+      color: #666;
+      font-family: monospace;
+    }
+    .verified-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .verified-yes { background: #d4edda; color: #155724; }
+    .verified-no { background: #f8d7da; color: #721c24; }
+    .credits-display {
+      font-weight: 600;
+      color: #667eea;
+    }
+    .edit-credits-btn {
+      padding: 4px 8px;
+      background: #667eea;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    
+    /* Modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-overlay.active {
+      display: flex;
+    }
+    .modal {
+      background: white;
+      border-radius: 16px;
+      padding: 24px;
+      max-width: 400px;
+      width: 90%;
+    }
+    .modal h3 {
+      margin-bottom: 16px;
+    }
+    .modal-actions {
+      display: flex;
+      gap: 12px;
+      margin-top: 20px;
+    }
+    .modal-actions .btn {
+      flex: 1;
+    }
+    .btn-cancel {
+      background: #e0e0e0;
+      color: #333;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>AI Storiz Admin</h1>
+      <p>Manage Settings, Users & Credits</p>
+    </div>
+    
+    <div class="content">
+      <!-- Login Section -->
+      <div id="login-section">
+        <div id="login-error" class="error"></div>
+        <form id="login-form">
+          <div class="form-group">
+            <label for="password">Admin Password</label>
+            <input type="password" id="password" placeholder="Enter admin password" required>
+          </div>
+          <button type="submit" class="btn btn-primary">Login</button>
+        </form>
+      </div>
+      
+      <!-- Dashboard Section -->
+      <div id="dashboard-section">
+        <div id="save-success" class="success">Settings saved successfully!</div>
+        <div id="save-error" class="error"></div>
+        
+        <!-- Tabs -->
+        <div class="tabs">
+          <div class="tab active" data-tab="stats">Stats</div>
+          <div class="tab" data-tab="credits">Credit Settings</div>
+          <div class="tab" data-tab="rate-limits">Rate Limits</div>
+          <div class="tab" data-tab="referrals">Referrals</div>
+          <div class="tab" data-tab="audit-logs">Audit Logs</div>
+          <div class="tab" data-tab="users">Users</div>
+          <div class="tab" data-tab="providers">AI Providers</div>
+          <div class="tab" data-tab="oauth">Google OAuth</div>
+          <div class="tab" data-tab="ads">Internal Ads</div>
+          <div class="tab" data-tab="art-styles">Art Styles</div>
+          <div class="tab" data-tab="notifications">Notifications</div>
+        </div>
+        
+        <!-- Stats Tab -->
+        <div id="tab-stats" class="tab-content active">
+          <div class="stats-grid" id="stats-grid">
+            <div class="stat-card">
+              <div class="stat-value" id="stat-total-users">-</div>
+              <div class="stat-label">Total Users</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="stat-verified-users">-</div>
+              <div class="stat-label">Verified</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="stat-unverified-users">-</div>
+              <div class="stat-label">Unverified</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="stat-subscriptions">-</div>
+              <div class="stat-label">Active Subscriptions</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="stat-credits-issued">-</div>
+              <div class="stat-label">Credits Issued</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="stat-credits-used">-</div>
+              <div class="stat-label">Credits Used</div>
+            </div>
+          </div>
+          <button class="btn btn-primary" style="width: auto;" onclick="loadStats()">Refresh Stats</button>
+        </div>
+        
+        <!-- Credits Tab -->
+        <div id="tab-credits" class="tab-content">
+          <div class="info-box">
+            Configure credit costs for comic generation and subscription plans.
+          </div>
+          <div class="settings-grid" id="credit-settings-form">
+            <div class="setting-card">
+              <h4>Base Cost (Credits)</h4>
+              <input type="number" class="setting-input" id="credit-baseCost" value="50">
+              <div class="setting-help">Cost for generating a comic</div>
+            </div>
+            <div class="setting-card">
+              <h4>Cost Per Extra Page</h4>
+              <input type="number" class="setting-input" id="credit-perPageCost" value="15">
+              <div class="setting-help">Additional credits per page</div>
+            </div>
+            <div class="setting-card">
+              <h4>Ad Reward (Credits)</h4>
+              <input type="number" class="setting-input" id="credit-adRewardCredits" value="25">
+              <div class="setting-help">Credits earned per ad watched</div>
+            </div>
+            <div class="setting-card">
+              <h4>Max Ads Per Day</h4>
+              <input type="number" class="setting-input" id="credit-maxAdsPerDay" value="5">
+              <div class="setting-help">Maximum rewarded ads per day</div>
+            </div>
+            <div class="setting-card">
+              <h4>Weekly Plan Price ($)</h4>
+              <input type="number" step="0.01" class="setting-input" id="credit-weeklyPrice" value="6.99">
+              <div class="setting-help">Price for weekly subscription</div>
+            </div>
+            <div class="setting-card">
+              <h4>Weekly Plan Credits</h4>
+              <input type="number" class="setting-input" id="credit-weeklyCredits" value="300">
+              <div class="setting-help">Credits in weekly plan</div>
+            </div>
+            <div class="setting-card">
+              <h4>Yearly Plan Price ($)</h4>
+              <input type="number" step="0.01" class="setting-input" id="credit-yearlyPrice" value="69">
+              <div class="setting-help">Price for yearly subscription</div>
+            </div>
+            <div class="setting-card">
+              <h4>Yearly Plan Credits</h4>
+              <input type="number" class="setting-input" id="credit-yearlyCredits" value="3000">
+              <div class="setting-help">Credits in yearly plan</div>
+            </div>
+          </div>
+          <button class="btn btn-primary" style="width: auto; margin-top: 20px;" onclick="saveCreditSettings()">Save Credit Settings</button>
+          
+          <h3 style="margin-top: 40px; margin-bottom: 16px; color: #333;">Credit Top-Up Options</h3>
+          <p style="color: #666; margin-bottom: 20px;">Configure standalone credit purchase options for subscribed users.</p>
+          <div class="settings-grid" id="topup-settings-form">
+            <div class="setting-card">
+              <h4>Top-Up Option 1 - Credits</h4>
+              <input type="number" class="setting-input" id="credit-topUp1Credits" value="100">
+              <div class="setting-help">Credits for option 1</div>
+            </div>
+            <div class="setting-card">
+              <h4>Top-Up Option 1 - Price ($)</h4>
+              <input type="number" step="0.01" class="setting-input" id="credit-topUp1Price" value="2.99">
+              <div class="setting-help">Price for option 1</div>
+            </div>
+            <div class="setting-card">
+              <h4>Top-Up Option 2 - Credits</h4>
+              <input type="number" class="setting-input" id="credit-topUp2Credits" value="500">
+              <div class="setting-help">Credits for option 2</div>
+            </div>
+            <div class="setting-card">
+              <h4>Top-Up Option 2 - Price ($)</h4>
+              <input type="number" step="0.01" class="setting-input" id="credit-topUp2Price" value="9.99">
+              <div class="setting-help">Price for option 2</div>
+            </div>
+            <div class="setting-card">
+              <h4>Top-Up Option 3 - Credits</h4>
+              <input type="number" class="setting-input" id="credit-topUp3Credits" value="1000">
+              <div class="setting-help">Credits for option 3</div>
+            </div>
+            <div class="setting-card">
+              <h4>Top-Up Option 3 - Price ($)</h4>
+              <input type="number" step="0.01" class="setting-input" id="credit-topUp3Price" value="19.99">
+              <div class="setting-help">Price for option 3</div>
+            </div>
+          </div>
+          <button class="btn btn-primary" style="width: auto; margin-top: 20px;" onclick="saveCreditSettings()">Save All Settings</button>
+        </div>
+        
+        <!-- Rate Limits Tab -->
+        <div id="tab-rate-limits" class="tab-content">
+          <div class="info-box">
+            Configure rate limits to prevent abuse. Limits are per-user and reset hourly/daily.
+          </div>
+          <div class="settings-grid">
+            <div class="setting-card">
+              <h4>Rate Limiting Enabled</h4>
+              <div class="toggle-container">
+                <div class="toggle" id="rate-limit-enabled" onclick="toggleRateLimit()"></div>
+                <span id="rate-limit-status-text">Disabled</span>
+              </div>
+              <div class="setting-help">Enable or disable rate limiting</div>
+            </div>
+            <div class="setting-card">
+              <h4>Max Generations Per Hour</h4>
+              <input type="number" class="setting-input" id="rate-limit-hourly" value="5">
+              <div class="setting-help">Maximum comics a user can generate per hour</div>
+            </div>
+            <div class="setting-card">
+              <h4>Max Generations Per Day</h4>
+              <input type="number" class="setting-input" id="rate-limit-daily" value="20">
+              <div class="setting-help">Maximum comics a user can generate per 24 hours</div>
+            </div>
+          </div>
+          <button class="btn btn-primary" style="width: auto; margin-top: 20px;" onclick="saveRateLimitSettings()">Save Rate Limits</button>
+        </div>
+        
+        <!-- Referrals Tab -->
+        <div id="tab-referrals" class="tab-content">
+          <div class="info-box">
+            Manage referral program settings and view referral history.
+          </div>
+          
+          <!-- Referral Stats -->
+          <div class="stats-grid" id="referral-stats-grid">
+            <div class="stat-card">
+              <div class="stat-value" id="referral-total">-</div>
+              <div class="stat-label">Total Referrals</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="referral-credits-awarded">-</div>
+              <div class="stat-label">Credits Awarded</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="referral-top-referrer">-</div>
+              <div class="stat-label">Top Referrer</div>
+            </div>
+          </div>
+          
+          <!-- Referral Settings -->
+          <h3 style="margin: 24px 0 16px;">Referral Settings</h3>
+          <div class="settings-grid">
+            <div class="setting-card">
+              <h4>Referral Program Enabled</h4>
+              <div class="toggle-container">
+                <div class="toggle" id="referral-enabled" onclick="toggleReferralEnabled()"></div>
+                <span id="referral-status-text">Disabled</span>
+              </div>
+              <div class="setting-help">Enable or disable the referral program</div>
+            </div>
+            <div class="setting-card">
+              <h4>Inviter Credits</h4>
+              <input type="number" class="setting-input" id="referral-inviter-credits" value="25">
+              <div class="setting-help">Credits given to the person who invites</div>
+            </div>
+            <div class="setting-card">
+              <h4>Invitee Credits</h4>
+              <input type="number" class="setting-input" id="referral-invitee-credits" value="25">
+              <div class="setting-help">Credits given to the new user who joins</div>
+            </div>
+          </div>
+          <button class="btn btn-primary" style="width: auto; margin-top: 20px;" onclick="saveReferralSettings()">Save Referral Settings</button>
+          
+          <!-- Referral Bounties -->
+          <h3 style="margin: 32px 0 16px;">Referral Bounties</h3>
+          <div class="info-box" style="margin-bottom: 16px;">
+            Create time-limited promotional campaigns with bonus rewards. Bounties give specific users extra credits for their referrals.
+          </div>
+          
+          <div class="bounty-form" style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+            <h4 style="margin: 0 0 16px;">Create New Bounty</h4>
+            <div class="settings-grid">
+              <div class="setting-card">
+                <h4>User Email</h4>
+                <input type="email" class="setting-input" id="bounty-user-email" placeholder="user@example.com">
+                <div class="setting-help">Email of the user who gets the bonus</div>
+              </div>
+              <div class="setting-card">
+                <h4>Bonus Credits</h4>
+                <input type="number" class="setting-input" id="bounty-credits" value="50">
+                <div class="setting-help">Extra credits per successful referral</div>
+              </div>
+              <div class="setting-card">
+                <h4>Expires At</h4>
+                <input type="datetime-local" class="setting-input" id="bounty-expires">
+                <div class="setting-help">When this bounty expires</div>
+              </div>
+              <div class="setting-card">
+                <h4>Description</h4>
+                <input type="text" class="setting-input" id="bounty-description" placeholder="e.g., Launch week promo">
+                <div class="setting-help">Optional note about this bounty</div>
+              </div>
+            </div>
+            <button class="btn btn-primary" style="width: auto; margin-top: 16px;" onclick="createBounty()">Create Bounty</button>
+          </div>
+          
+          <h4>Active Bounties</h4>
+          <div class="table-container">
+            <table class="data-table" id="bounties-table">
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Bonus Credits</th>
+                  <th>Expires</th>
+                  <th>Description</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="bounties-body">
+                <tr><td colspan="5" style="text-align: center;">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+          
+          <!-- Referral History -->
+          <h3 style="margin: 32px 0 16px;">Recent Referral History</h3>
+          <div class="table-container">
+            <table class="data-table" id="referral-history-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Inviter</th>
+                  <th>Invitee</th>
+                  <th>Credits</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="referral-history-body">
+                <tr><td colspan="5" style="text-align: center;">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <button class="btn btn-primary" style="width: auto; margin-top: 16px;" onclick="loadReferralData()">Refresh</button>
+        </div>
+        
+        <!-- Audit Logs Tab -->
+        <div id="tab-audit-logs" class="tab-content">
+          <div class="info-box">
+            View all comic generation attempts, including rate-limited and insufficient credit events.
+          </div>
+          
+          <!-- Audit Stats -->
+          <div class="stats-grid" id="audit-stats-grid">
+            <div class="stat-card">
+              <div class="stat-value" id="audit-total-generations">-</div>
+              <div class="stat-label">Total Generations</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="audit-successful">-</div>
+              <div class="stat-label">Successful</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="audit-failed">-</div>
+              <div class="stat-label">Failed</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="audit-rate-limited">-</div>
+              <div class="stat-label">Rate Limited</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="audit-insufficient-credits">-</div>
+              <div class="stat-label">No Credits</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="audit-last-24h">-</div>
+              <div class="stat-label">Last 24h</div>
+            </div>
+          </div>
+          
+          <!-- Filter Controls -->
+          <div style="display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; align-items: center;">
+            <select id="audit-action-filter" class="setting-input" style="width: auto; min-width: 150px;">
+              <option value="">All Actions</option>
+              <option value="generation_started">Started</option>
+              <option value="generation_completed">Completed</option>
+              <option value="generation_failed">Failed</option>
+              <option value="rate_limited">Rate Limited</option>
+              <option value="insufficient_credits">Insufficient Credits</option>
+            </select>
+            <button class="btn btn-primary" style="width: auto;" onclick="loadAuditLogs()">Filter</button>
+            <button class="btn btn-small" style="background: #6c757d; color: white;" onclick="refreshAuditStats()">Refresh Stats</button>
+          </div>
+          
+          <!-- Audit Logs Table -->
+          <div class="users-table-container">
+            <table class="users-table" id="audit-logs-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>User</th>
+                  <th>Action</th>
+                  <th>Status</th>
+                  <th>Credits</th>
+                  <th>Style</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody id="audit-logs-list"></tbody>
+            </table>
+          </div>
+          
+          <!-- Pagination -->
+          <div style="display: flex; gap: 12px; margin-top: 16px; justify-content: center;">
+            <button class="btn btn-small" style="background: #667eea; color: white;" id="audit-prev-btn" onclick="auditPrevPage()" disabled>Previous</button>
+            <span id="audit-page-info" style="padding: 10px;">Page 1</span>
+            <button class="btn btn-small" style="background: #667eea; color: white;" id="audit-next-btn" onclick="auditNextPage()">Next</button>
+          </div>
+        </div>
+        
+        <!-- Users Tab -->
+        <div id="tab-users" class="tab-content">
+          <div class="info-box">
+            Manage user accounts, view credits, and update subscription status.
+          </div>
+          <div class="users-table-container">
+            <table class="users-table">
+              <thead>
+                <tr>
+                  <th>Email</th>
+                  <th>User ID</th>
+                  <th>Credits</th>
+                  <th>Verified</th>
+                  <th>Subscription</th>
+                  <th>Joined</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="users-list"></tbody>
+            </table>
+          </div>
+        </div>
+        
+        <!-- Providers Tab -->
+        <div id="tab-providers" class="tab-content">
+          <div class="info-box">
+            OpenAI is pre-configured via Replit integrations. Add your own API keys for other providers.
+          </div>
+          
+          <!-- Comic Generation Mode Selector -->
+          <div class="gen-mode-selector" style="background: linear-gradient(135deg, #e11d48 0%, #be123c 100%); color: white; padding: 20px; border-radius: 12px; margin-bottom: 24px;">
+            <h3 style="margin-bottom: 8px; font-size: 18px;">Comic Generation Mode</h3>
+            <p style="opacity: 0.9; margin-bottom: 16px; font-size: 14px;">Choose how comic pages are generated. Multi-Model generates individual panels separately. Gemini Full-Page generates entire comic pages (panels + gutters + speech bubbles) as single images.</p>
+            <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+              <label style="display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.2); padding: 12px 16px; border-radius: 8px; cursor: pointer; flex: 1; min-width: 200px;" id="gen-mode-multi-model">
+                <input type="radio" name="genMode" value="multi-model" onchange="setGenerationMode('multi-model')" style="width: 18px; height: 18px;">
+                <div>
+                  <div style="font-weight: 600;">Multi-Model (Default)</div>
+                  <div style="font-size: 12px; opacity: 0.8;">Individual panels with character refs, ~20 image calls per 5-page comic</div>
+                </div>
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.2); padding: 12px 16px; border-radius: 8px; cursor: pointer; flex: 1; min-width: 200px;" id="gen-mode-gemini-fullpage">
+                <input type="radio" name="genMode" value="gemini-fullpage" onchange="setGenerationMode('gemini-fullpage')" style="width: 18px; height: 18px;">
+                <div>
+                  <div style="font-weight: 600;">Gemini Full-Page</div>
+                  <div style="font-size: 12px; opacity: 0.8;">Entire pages as single images, ~5-9 calls, 2-3x faster, built-in speech bubbles</div>
+                </div>
+              </label>
+            </div>
+            <div id="gen-mode-warning" style="margin-top: 12px; padding: 10px; background: rgba(255,200,0,0.3); border-radius: 6px; font-size: 13px; display: none;">
+              Gemini Full-Page mode requires a Gemini API key configured below.
+            </div>
+          </div>
+          
+          <!-- Panel Generation Provider Selector -->
+          <div class="panel-gen-selector" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 12px; margin-bottom: 24px;">
+            <h3 style="margin-bottom: 8px; font-size: 18px;">Panel Generation Provider (Stage 2)</h3>
+            <p style="opacity: 0.9; margin-bottom: 16px; font-size: 14px;">Select which provider to use for generating comic panels with multiple character references.</p>
+            <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+              <label style="display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.2); padding: 12px 16px; border-radius: 8px; cursor: pointer; flex: 1; min-width: 200px;" id="panel-provider-siliconflow">
+                <input type="radio" name="panelProvider" value="siliconflow" onchange="setPanelProvider('siliconflow')" style="width: 18px; height: 18px;">
+                <div>
+                  <div style="font-weight: 600;">SiliconFlow FLUX Kontext</div>
+                  <div style="font-size: 12px; opacity: 0.8;">$0.015/image - Up to 8 refs</div>
+                </div>
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.2); padding: 12px 16px; border-radius: 8px; cursor: pointer; flex: 1; min-width: 200px;" id="panel-provider-flux2pro">
+                <input type="radio" name="panelProvider" value="flux2pro" onchange="setPanelProvider('flux2pro')" style="width: 18px; height: 18px;">
+                <div>
+                  <div style="font-weight: 600;">FLUX.2 Pro (Replicate)</div>
+                  <div style="font-size: 12px; opacity: 0.8;">$0.03/image - Up to 8 refs, faster</div>
+                </div>
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.2); padding: 12px 16px; border-radius: 8px; cursor: pointer; flex: 1; min-width: 200px;" id="panel-provider-gemini">
+                <input type="radio" name="panelProvider" value="gemini" onchange="setPanelProvider('gemini')" style="width: 18px; height: 18px;">
+                <div>
+                  <div style="font-weight: 600;">Gemini Image Generation</div>
+                  <div style="font-size: 12px; opacity: 0.8;">$0.039/image - Up to 8 refs, better text</div>
+                </div>
+              </label>
+            </div>
+            <div id="panel-provider-warning" style="margin-top: 12px; padding: 10px; background: rgba(255,200,0,0.3); border-radius: 6px; font-size: 13px; display: none;">
+              Make sure the selected provider is enabled and has a valid API key configured below.
+            </div>
+          </div>
+          
+          <!-- Fallback Provider Selector -->
+          <div class="fallback-selector" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; padding: 20px; border-radius: 12px; margin-bottom: 24px;">
+            <h3 style="margin-bottom: 8px; font-size: 18px;">Fallback API Provider</h3>
+            <p style="opacity: 0.9; margin-bottom: 16px; font-size: 14px;">Select a backup provider to use if the primary and other enabled providers fail. The system will try all enabled providers first before using this fallback.</p>
+            <div class="form-group" style="margin-bottom: 0;">
+              <select id="fallback-provider-select" onchange="setFallbackProvider(this.value)" style="width: 100%; padding: 12px; border-radius: 8px; border: none; font-size: 14px; background: rgba(255,255,255,0.95); color: #333;">
+                <option value="">No Fallback (Disabled)</option>
+                <option value="openai">OpenAI (gpt-image-1)</option>
+                <option value="replicate">Replicate</option>
+                <option value="siliconflow">SiliconFlow</option>
+                <option value="stability">Stability AI</option>
+              </select>
+            </div>
+            <div id="fallback-provider-warning" style="margin-top: 12px; padding: 10px; background: rgba(255,200,0,0.3); border-radius: 6px; font-size: 13px; display: none;">
+              Make sure the fallback provider has a valid API key configured below.
+            </div>
+          </div>
+          
+          <!-- Story Text Provider Selector -->
+          <div class="story-text-selector" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 20px; border-radius: 12px; margin-bottom: 24px;">
+            <h3 style="margin-bottom: 8px; font-size: 18px;">Story Text Provider</h3>
+            <p style="opacity: 0.9; margin-bottom: 16px; font-size: 14px;">Select which AI model to use for generating story text, dialogue, and outfit descriptions.</p>
+            <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px;">
+              <label style="display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.2); padding: 12px 16px; border-radius: 8px; cursor: pointer; flex: 1; min-width: 180px;" id="text-provider-openai">
+                <input type="radio" name="textProvider" value="openai" onchange="setTextProvider('openai')" style="width: 18px; height: 18px;">
+                <div>
+                  <div style="font-weight: 600;">OpenAI</div>
+                  <div style="font-size: 12px; opacity: 0.8;">GPT-4o, GPT-4o-mini</div>
+                </div>
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.2); padding: 12px 16px; border-radius: 8px; cursor: pointer; flex: 1; min-width: 180px;" id="text-provider-gemini">
+                <input type="radio" name="textProvider" value="gemini" onchange="setTextProvider('gemini')" style="width: 18px; height: 18px;">
+                <div>
+                  <div style="font-weight: 600;">Google Gemini</div>
+                  <div style="font-size: 12px; opacity: 0.8;">2.0 Flash, 1.5 Pro</div>
+                </div>
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.2); padding: 12px 16px; border-radius: 8px; cursor: pointer; flex: 1; min-width: 180px;" id="text-provider-replicate">
+                <input type="radio" name="textProvider" value="replicate" onchange="setTextProvider('replicate')" style="width: 18px; height: 18px;">
+                <div>
+                  <div style="font-weight: 600;">Replicate (Llama)</div>
+                  <div style="font-size: 12px; opacity: 0.8;">Llama 3 70B, 3.1 405B</div>
+                </div>
+              </label>
+            </div>
+            
+            <!-- Model selectors per provider -->
+            <div id="text-model-openai" style="display: none; margin-bottom: 12px;">
+              <label style="font-size: 13px; opacity: 0.9; margin-bottom: 6px; display: block;">OpenAI Model:</label>
+              <select id="text-openai-model" onchange="setTextModel('openai', this.value)" style="width: 100%; padding: 10px; border-radius: 8px; border: none; font-size: 14px; background: rgba(255,255,255,0.95); color: #333;">
+                <option value="gpt-4o">GPT-4o (Recommended)</option>
+                <option value="gpt-4o-mini">GPT-4o-mini (Faster, cheaper)</option>
+              </select>
+            </div>
+            <div id="text-model-gemini" style="display: none; margin-bottom: 12px;">
+              <label style="font-size: 13px; opacity: 0.9; margin-bottom: 6px; display: block;">Gemini Model:</label>
+              <select id="text-gemini-model" onchange="setTextModel('gemini', this.value)" style="width: 100%; padding: 10px; border-radius: 8px; border: none; font-size: 14px; background: rgba(255,255,255,0.95); color: #333;">
+                <option value="gemini-2.0-flash">Gemini 2.0 Flash (Recommended)</option>
+                <option value="gemini-1.5-pro">Gemini 1.5 Pro (Higher quality)</option>
+              </select>
+              <div style="margin-top: 8px;">
+                <label style="font-size: 13px; opacity: 0.9; margin-bottom: 6px; display: block;">Gemini API Key:</label>
+                <div style="display: flex; gap: 8px;">
+                  <input type="password" id="text-gemini-apikey" placeholder="Enter Google AI API key" style="flex: 1; padding: 10px; border-radius: 8px; border: none; font-size: 14px;">
+                  <button onclick="saveGeminiApiKey()" style="padding: 10px 16px; border-radius: 8px; border: none; background: rgba(255,255,255,0.3); color: white; cursor: pointer; font-weight: 600;">Save</button>
+                </div>
+              </div>
+            </div>
+            <div id="text-model-replicate" style="display: none; margin-bottom: 12px;">
+              <label style="font-size: 13px; opacity: 0.9; margin-bottom: 6px; display: block;">Replicate Model:</label>
+              <select id="text-replicate-model" onchange="setTextModel('replicate', this.value)" style="width: 100%; padding: 10px; border-radius: 8px; border: none; font-size: 14px; background: rgba(255,255,255,0.95); color: #333;">
+                <option value="meta/meta-llama-3-70b-instruct">Llama 3 70B Instruct</option>
+                <option value="meta/meta-llama-3.1-405b-instruct">Llama 3.1 405B Instruct</option>
+              </select>
+              <p style="font-size: 12px; opacity: 0.7; margin-top: 6px;">Uses the Replicate API key configured below.</p>
+            </div>
+            
+            <div id="text-provider-status" style="margin-top: 8px; padding: 8px 12px; border-radius: 6px; font-size: 13px; display: none;"></div>
+          </div>
+          
+          <div id="providers-list"></div>
+        </div>
+        
+        <!-- Google OAuth Tab -->
+        <div id="tab-oauth" class="tab-content">
+          <div class="info-box">
+            Configure Google OAuth client IDs for Google Sign-In functionality. You'll need to create credentials in the <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color: #667eea;">Google Cloud Console</a>.
+          </div>
+          <div class="settings-grid">
+            <div class="setting-card">
+              <h4>Google OAuth Enabled</h4>
+              <div class="toggle-container">
+                <div class="toggle" id="oauth-enabled" onclick="toggleOAuth()"></div>
+                <span id="oauth-status-text">Disabled</span>
+              </div>
+              <div class="setting-help">Enable or disable Google Sign-In</div>
+            </div>
+            <div class="setting-card" style="grid-column: span 2;">
+              <h4>Web Client ID</h4>
+              <input type="text" class="setting-input" id="oauth-web-client-id" placeholder="123456789-abcdefgh.apps.googleusercontent.com">
+              <div class="setting-help">For browser-based login (Expo Web)</div>
+            </div>
+            <div class="setting-card" style="grid-column: span 2;">
+              <h4>iOS Client ID</h4>
+              <input type="text" class="setting-input" id="oauth-ios-client-id" placeholder="123456789-ijklmnop.apps.googleusercontent.com">
+              <div class="setting-help">For iOS devices (Expo Go on iPhone)</div>
+            </div>
+            <div class="setting-card" style="grid-column: span 2;">
+              <h4>Android Client ID</h4>
+              <input type="text" class="setting-input" id="oauth-android-client-id" placeholder="123456789-qrstuvwx.apps.googleusercontent.com">
+              <div class="setting-help">For Android devices (Expo Go on Android)</div>
+            </div>
+          </div>
+          <button class="btn btn-primary" style="width: auto; margin-top: 20px;" onclick="saveOAuthSettings()">Save OAuth Settings</button>
+          
+          <div class="info-box" style="margin-top: 24px; background: #f0f4f8;">
+            <h4 style="margin-bottom: 8px;">Setup Instructions:</h4>
+            <ol style="margin: 0; padding-left: 20px; font-size: 14px;">
+              <li>Go to <a href="https://console.cloud.google.com" target="_blank">Google Cloud Console</a></li>
+              <li>Create or select a project</li>
+              <li>Navigate to APIs & Services → OAuth consent screen</li>
+              <li>Configure the consent screen (External type for testing)</li>
+              <li>Go to APIs & Services → Credentials</li>
+              <li>Create OAuth 2.0 Client ID for each platform:
+                <ul style="margin-top: 4px;">
+                  <li><strong>Web:</strong> Authorized redirect URI: your-domain.com</li>
+                  <li><strong>iOS:</strong> Bundle ID: host.exp.exponent (for Expo Go)</li>
+                  <li><strong>Android:</strong> Package name: host.exp.exponent (for Expo Go)</li>
+                </ul>
+              </li>
+            </ol>
+          </div>
+        </div>
+        
+        <!-- Internal Ads Tab -->
+        <div id="tab-ads" class="tab-content">
+          <div class="info-box">
+            Manage internal advertisements displayed to users. Text ads appear at the footer, banner ads (15% screen height) appear in the middle of pages.
+          </div>
+          
+          <!-- Ad Settings -->
+          <h4 style="margin-bottom: 16px;">Display Settings</h4>
+          <div class="settings-grid" style="margin-bottom: 24px;">
+            <div class="setting-card">
+              <h4>Ads Enabled</h4>
+              <div class="toggle-container">
+                <div class="toggle" id="ads-enabled" onclick="toggleAds()"></div>
+                <span id="ads-status-text">Disabled</span>
+              </div>
+              <div class="setting-help">Enable or disable all internal ads</div>
+            </div>
+            <div class="setting-card">
+              <h4>Exempt Subscribers</h4>
+              <div class="toggle-container">
+                <div class="toggle" id="ads-exempt-subscribers" onclick="toggleAdsExemptSubscribers()"></div>
+                <span id="ads-exempt-text">Yes</span>
+              </div>
+              <div class="setting-help">Hide ads from paying subscribers</div>
+            </div>
+            <div class="setting-card">
+              <h4>Max Per Hour</h4>
+              <input type="number" class="setting-input" id="ads-max-per-hour" min="0" max="20" value="3">
+              <div class="setting-help">Maximum impressions per user per hour</div>
+            </div>
+            <div class="setting-card">
+              <h4>Max Per Day</h4>
+              <input type="number" class="setting-input" id="ads-max-per-day" min="0" max="100" value="10">
+              <div class="setting-help">Maximum impressions per user per day</div>
+            </div>
+          </div>
+          <button class="btn btn-primary" style="width: auto; margin-bottom: 32px;" onclick="saveAdSettings()">Save Ad Settings</button>
+          
+          <!-- Create Ad -->
+          <h4 style="margin-bottom: 16px;">Create New Ad</h4>
+          <div class="settings-grid" style="margin-bottom: 16px;">
+            <div class="setting-card">
+              <h4>Ad Type</h4>
+              <select class="setting-input" id="new-ad-type" onchange="updateAdForm()">
+                <option value="text">Text Ad (Footer)</option>
+                <option value="banner">Banner Ad (15% Height)</option>
+              </select>
+            </div>
+            <div class="setting-card">
+              <h4>Title</h4>
+              <input type="text" class="setting-input" id="new-ad-title" placeholder="Ad campaign name">
+            </div>
+            <div class="setting-card" id="new-ad-content-container" style="grid-column: span 2;">
+              <h4>Content Text</h4>
+              <textarea class="setting-input" id="new-ad-content" rows="2" placeholder="Your advertisement text..."></textarea>
+            </div>
+            <div class="setting-card" id="new-ad-image-container" style="grid-column: span 2; display: none;">
+              <h4>Image URL</h4>
+              <input type="text" class="setting-input" id="new-ad-image" placeholder="https://example.com/banner.jpg">
+              <div class="setting-help">Recommended: 1080x400 pixels (about 15% of mobile screen). Use direct image URL (e.g., https://i.ibb.co/...)</div>
+            </div>
+            <div class="setting-card" style="grid-column: span 2;">
+              <h4>Link URL (Optional)</h4>
+              <input type="text" class="setting-input" id="new-ad-link" placeholder="https://example.com/offer">
+              <div class="setting-help">Where users go when they tap the ad</div>
+            </div>
+          </div>
+          <button class="btn btn-primary" style="width: auto; margin-bottom: 32px;" onclick="createAd()">Create Ad</button>
+          
+          <!-- Ads List -->
+          <h4 style="margin-bottom: 16px;">Existing Ads</h4>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>Title</th>
+                <th>Content/Image</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="ads-list">
+              <tr><td colspan="5">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+        
+        <!-- Art Styles Tab -->
+        <div id="tab-art-styles" class="tab-content">
+          <h3>Art Style Management</h3>
+          
+          <div class="settings-section">
+            <h4>Global Settings</h4>
+            <div class="form-group">
+              <label>Unlock All Styles Cost (credits)</label>
+              <input type="number" id="art-unlock-all-cost" class="setting-input" min="0" value="500">
+              <p style="color: #666; font-size: 12px;">Cost for users to unlock all current and future art styles at once.</p>
+            </div>
+            <button class="btn btn-primary" onclick="saveArtStyleSettings()">Save Global Settings</button>
+          </div>
+          
+          <div class="settings-section" style="margin-top: 24px;">
+            <h4>Art Styles</h4>
+            <p style="color: #666; margin-bottom: 16px;">Manage pricing and premium status for each art style.</p>
+            <div class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Premium</th>
+                    <th>Unlock Cost</th>
+                    <th>Display Order</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="art-styles-list">
+                  <tr><td colspan="5">Loading...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Notifications Tab -->
+        <div id="tab-notifications" class="tab-content">
+          <h3>Push Notification Settings</h3>
+          
+          <div class="stats-grid" style="margin-bottom: 24px;">
+            <div class="stat-card">
+              <div class="stat-value" id="notif-active-devices">-</div>
+              <div class="stat-label">Active Devices</div>
+            </div>
+          </div>
+          
+          <div class="settings-section">
+            <h4>Global Settings</h4>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="notif-enabled" onchange="saveNotificationSettings()">
+                Enable Push Notifications
+              </label>
+              <p style="color: #666; font-size: 12px;">When disabled, no push notifications will be sent to any user.</p>
+            </div>
+            <div class="form-group">
+              <label>Low Credits Threshold</label>
+              <input type="number" id="notif-low-credits-threshold" class="setting-input" min="0" max="100" value="20">
+              <p style="color: #666; font-size: 12px;">Notify users when their credits fall below this amount.</p>
+            </div>
+            <button class="btn btn-primary" onclick="saveNotificationSettings()">Save Settings</button>
+          </div>
+          
+          <div class="settings-section" style="margin-top: 24px;">
+            <h4>Send Broadcast Notification</h4>
+            <p style="color: #666; margin-bottom: 16px;">Send a notification to all users with active devices.</p>
+            
+            <div class="form-group">
+              <label>Title *</label>
+              <input type="text" id="broadcast-title" class="setting-input" placeholder="Notification title">
+            </div>
+            <div class="form-group">
+              <label>Message *</label>
+              <textarea id="broadcast-body" class="setting-input" rows="3" placeholder="Notification message"></textarea>
+            </div>
+            <button class="btn btn-primary" onclick="sendBroadcast()">Send to All Users</button>
+          </div>
+          
+          <div class="settings-section" style="margin-top: 24px;">
+            <h4>Notification History</h4>
+            <div class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Type</th>
+                    <th>Title</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="notification-history-list">
+                  <tr><td colspan="4">Loading...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        
+        <a href="#" class="logout-link" onclick="logout(); return false;">Logout</a>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Edit User Modal -->
+  <div class="modal-overlay" id="edit-user-modal">
+    <div class="modal">
+      <h3>Edit User</h3>
+      <input type="hidden" id="edit-user-id">
+      <div class="form-group">
+        <label>Email</label>
+        <input type="text" id="edit-user-email" disabled>
+      </div>
+      <div class="form-group">
+        <label>Credits</label>
+        <input type="number" id="edit-user-credits" class="setting-input">
+      </div>
+      <div class="form-group">
+        <label>Subscription Status</label>
+        <select id="edit-user-subscription" class="setting-input">
+          <option value="none">None</option>
+          <option value="weekly">Weekly</option>
+          <option value="yearly">Yearly</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" onclick="closeEditModal()">Cancel</button>
+        <button class="btn" style="background:#e74c3c;color:#fff;" onclick="openRevokeStylesModal()">Manage Styles</button>
+        <button class="btn btn-primary" onclick="saveUserEdit()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Revoke Styles Modal -->
+  <div class="modal-overlay" id="revoke-styles-modal">
+    <div class="modal" style="max-width:500px;">
+      <h3>Manage Unlocked Art Styles</h3>
+      <p id="revoke-styles-user" style="color:#666;margin-bottom:12px;"></p>
+      <div id="revoke-styles-loading" style="text-align:center;padding:20px;">Loading...</div>
+      <div id="revoke-styles-list" style="display:none;"></div>
+      <div class="modal-actions" style="margin-top:16px;">
+        <button class="btn btn-cancel" onclick="closeRevokeStylesModal()">Close</button>
+        <button class="btn" style="background:#e74c3c;color:#fff;" id="revoke-all-btn" onclick="revokeAllStyles()" style="display:none;">Revoke All</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const PROVIDERS = [
+      { id: 'openai', name: 'OpenAI (GPT-Image-1)', desc: 'High quality, reliable. ~$0.04-0.12/image' },
+      { id: 'replicate', name: 'Replicate (FLUX Models)', desc: 'Character style transform (Stage 1). $0.025/image' },
+      { id: 'siliconflow', name: 'SiliconFlow (FLUX Kontext)', desc: 'Multi-character panels (Stage 2). $0.015/image, up to 8 refs' },
+      { id: 'flux2pro', name: 'FLUX.2 Pro (Replicate)', desc: 'Multi-reference (up to 8). $0.03/image, 6-9s generation' },
+      { id: 'stability', name: 'Stability AI (SDXL)', desc: 'High quality, customizable. ~$0.01-0.10/image' },
+      { id: 'geminiImage', name: 'Gemini Image Generation', desc: 'Google Gemini native imaging. $0.039/image, up to 8 refs' }
+    ];
+    
+    const REPLICATE_MODELS = [
+      { id: 'fluxSchnell', name: 'FLUX Schnell', desc: 'Fast & cheap text-to-image', cost: '$0.003/image' },
+      { id: 'flux11Pro', name: 'FLUX 1.1 Pro', desc: 'Premium quality text-to-image', cost: '$0.04/image' },
+      { id: 'fluxKontextDev', name: 'FLUX Kontext [dev]', desc: 'Character photo style transform', cost: '$0.025/image' }
+    ];
+    
+    const SILICONFLOW_MODELS = [
+      { id: 'fluxKontextDev', name: 'FLUX Kontext Dev', desc: 'Multi-reference character consistency', cost: '$0.015/image' }
+    ];
+    
+    const FLUX2PRO_MODELS = [
+      { id: 'flux2Pro', name: 'FLUX.2 Pro', desc: 'Up to 8 reference images, excellent identity', cost: '$0.03/image' },
+      { id: 'flux2Flex', name: 'FLUX.2 Flex', desc: 'Better typography, fine details', cost: '$0.06/MP' }
+    ];
+    
+    let settings = null;
+    let creditSettings = null;
+    let usersData = [];
+    let sessionToken = localStorage.getItem('admin_token');
+    
+    // Tab handling
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+        
+        // Load data for each tab
+        if (tab.dataset.tab === 'stats') loadStats();
+        if (tab.dataset.tab === 'credits') loadCreditSettings();
+        if (tab.dataset.tab === 'rate-limits') loadRateLimitSettings();
+        if (tab.dataset.tab === 'referrals') loadReferralData();
+        if (tab.dataset.tab === 'audit-logs') { loadAuditLogs(); refreshAuditStats(); }
+        if (tab.dataset.tab === 'users') loadUsers();
+        if (tab.dataset.tab === 'providers') loadSettings();
+        if (tab.dataset.tab === 'oauth') loadOAuthSettings();
+        if (tab.dataset.tab === 'ads') { loadAdSettings(); loadAds(); }
+        if (tab.dataset.tab === 'art-styles') { loadArtStyles(); }
+        if (tab.dataset.tab === 'notifications') { loadNotificationSettings(); loadNotificationHistory(); }
+      });
+    });
+    
+    // Check if already logged in
+    if (sessionToken) {
+      checkSession();
+    }
+    
+    async function checkSession() {
+      try {
+        const res = await fetch('/api/admin/verify', {
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (res.ok) {
+          showDashboard();
+          loadStats();
+        } else {
+          localStorage.removeItem('admin_token');
+          sessionToken = null;
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const password = document.getElementById('password').value;
+      const errorEl = document.getElementById('login-error');
+      errorEl.style.display = 'none';
+      
+      try {
+        const res = await fetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password })
+        });
+        
+        if (res.ok) {
+          const data = await res.json();
+          sessionToken = data.token;
+          localStorage.setItem('admin_token', sessionToken);
+          showDashboard();
+          loadStats();
+        } else {
+          errorEl.textContent = 'Invalid password';
+          errorEl.style.display = 'block';
+        }
+      } catch (err) {
+        errorEl.textContent = 'Connection error';
+        errorEl.style.display = 'block';
+      }
+    });
+    
+    function showDashboard() {
+      document.getElementById('login-section').style.display = 'none';
+      document.getElementById('dashboard-section').style.display = 'block';
+    }
+    
+    function logout() {
+      localStorage.removeItem('admin_token');
+      sessionToken = null;
+      location.reload();
+    }
+    
+    // Stats
+    async function loadStats() {
+      try {
+        const res = await fetch('/api/admin/stats', {
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (res.ok) {
+          const stats = await res.json();
+          document.getElementById('stat-total-users').textContent = stats.totalUsers;
+          document.getElementById('stat-verified-users').textContent = stats.verifiedUsers;
+          document.getElementById('stat-unverified-users').textContent = stats.unverifiedUsers;
+          document.getElementById('stat-subscriptions').textContent = stats.activeSubscriptions;
+          document.getElementById('stat-credits-issued').textContent = stats.totalCreditsIssued.toLocaleString();
+          document.getElementById('stat-credits-used').textContent = stats.totalCreditsUsed.toLocaleString();
+        }
+      } catch (err) {
+        console.error('Failed to load stats:', err);
+      }
+    }
+    
+    // Credit Settings
+    async function loadCreditSettings() {
+      try {
+        const res = await fetch('/api/admin/credit-settings', {
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (res.ok) {
+          creditSettings = await res.json();
+          document.getElementById('credit-baseCost').value = creditSettings.baseCost || 50;
+          document.getElementById('credit-perPageCost').value = creditSettings.costPerPage || 15;
+          document.getElementById('credit-adRewardCredits').value = creditSettings.adsCreditsReward || 25;
+          document.getElementById('credit-maxAdsPerDay').value = creditSettings.maxAdsPerDay || 5;
+          document.getElementById('credit-weeklyPrice').value = creditSettings.weeklyPlanPrice || 6.99;
+          document.getElementById('credit-weeklyCredits').value = creditSettings.weeklyPlanCredits || 300;
+          document.getElementById('credit-yearlyPrice').value = creditSettings.yearlyPlanPrice || 69;
+          document.getElementById('credit-yearlyCredits').value = creditSettings.yearlyPlanCredits || 3000;
+          document.getElementById('credit-topUp1Credits').value = creditSettings.topUp1Credits || 100;
+          document.getElementById('credit-topUp1Price').value = creditSettings.topUp1Price || 2.99;
+          document.getElementById('credit-topUp2Credits').value = creditSettings.topUp2Credits || 500;
+          document.getElementById('credit-topUp2Price').value = creditSettings.topUp2Price || 9.99;
+          document.getElementById('credit-topUp3Credits').value = creditSettings.topUp3Credits || 1000;
+          document.getElementById('credit-topUp3Price').value = creditSettings.topUp3Price || 19.99;
+        }
+      } catch (err) {
+        console.error('Failed to load credit settings:', err);
+      }
+    }
+    
+    async function saveCreditSettings() {
+      const updates = {
+        baseCost: parseInt(document.getElementById('credit-baseCost').value),
+        costPerPage: parseInt(document.getElementById('credit-perPageCost').value),
+        adsCreditsReward: parseInt(document.getElementById('credit-adRewardCredits').value),
+        maxAdsPerDay: parseInt(document.getElementById('credit-maxAdsPerDay').value),
+        weeklyPlanPrice: document.getElementById('credit-weeklyPrice').value,
+        weeklyPlanCredits: parseInt(document.getElementById('credit-weeklyCredits').value),
+        yearlyPlanPrice: document.getElementById('credit-yearlyPrice').value,
+        yearlyPlanCredits: parseInt(document.getElementById('credit-yearlyCredits').value),
+        topUp1Credits: parseInt(document.getElementById('credit-topUp1Credits').value),
+        topUp1Price: document.getElementById('credit-topUp1Price').value,
+        topUp2Credits: parseInt(document.getElementById('credit-topUp2Credits').value),
+        topUp2Price: document.getElementById('credit-topUp2Price').value,
+        topUp3Credits: parseInt(document.getElementById('credit-topUp3Credits').value),
+        topUp3Price: document.getElementById('credit-topUp3Price').value
+      };
+      
+      try {
+        const res = await fetch('/api/admin/credit-settings', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + sessionToken
+          },
+          body: JSON.stringify(updates)
+        });
+        
+        if (res.ok) {
+          showSuccess('Credit settings saved successfully!');
+        } else {
+          showError('Failed to save credit settings');
+        }
+      } catch (err) {
+        showError('Connection error');
+      }
+    }
+    
+    // Rate Limit Settings
+    let rateLimitEnabled = false;
+    
+    async function loadRateLimitSettings() {
+      try {
+        const res = await fetch('/api/admin/rate-limits', {
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const settings = data.settings;
+          rateLimitEnabled = settings.enabled;
+          document.getElementById('rate-limit-hourly').value = settings.maxGenerationsPerHour || 5;
+          document.getElementById('rate-limit-daily').value = settings.maxGenerationsPerDay || 20;
+          updateRateLimitToggle();
+        }
+      } catch (err) {
+        console.error('Failed to load rate limit settings:', err);
+      }
+    }
+    
+    function updateRateLimitToggle() {
+      const toggle = document.getElementById('rate-limit-enabled');
+      const statusText = document.getElementById('rate-limit-status-text');
+      if (rateLimitEnabled) {
+        toggle.classList.add('active');
+        statusText.textContent = 'Enabled';
+      } else {
+        toggle.classList.remove('active');
+        statusText.textContent = 'Disabled';
+      }
+    }
+    
+    function toggleRateLimit() {
+      rateLimitEnabled = !rateLimitEnabled;
+      updateRateLimitToggle();
+    }
+    
+    async function saveRateLimitSettings() {
+      const updates = {
+        enabled: rateLimitEnabled,
+        maxGenerationsPerHour: parseInt(document.getElementById('rate-limit-hourly').value),
+        maxGenerationsPerDay: parseInt(document.getElementById('rate-limit-daily').value)
+      };
+      
+      try {
+        const res = await fetch('/api/admin/rate-limits', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + sessionToken
+          },
+          body: JSON.stringify(updates)
+        });
+        
+        if (res.ok) {
+          showSuccess('Rate limit settings saved successfully!');
+        } else {
+          showError('Failed to save rate limit settings');
+        }
+      } catch (err) {
+        showError('Connection error');
+      }
+    }
+    
+    // OAuth Settings
+    let oauthEnabled = false;
+    
+    async function loadOAuthSettings() {
+      try {
+        const res = await fetch('/api/admin/oauth-settings', {
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (res.ok) {
+          const settings = await res.json();
+          oauthEnabled = settings.enabled;
+          document.getElementById('oauth-web-client-id').value = settings.googleWebClientId || '';
+          document.getElementById('oauth-ios-client-id').value = settings.googleIosClientId || '';
+          document.getElementById('oauth-android-client-id').value = settings.googleAndroidClientId || '';
+          updateOAuthToggle();
+        }
+      } catch (err) {
+        console.error('Failed to load OAuth settings:', err);
+      }
+    }
+    
+    function updateOAuthToggle() {
+      const toggle = document.getElementById('oauth-enabled');
+      const statusText = document.getElementById('oauth-status-text');
+      if (oauthEnabled) {
+        toggle.classList.add('active');
+        statusText.textContent = 'Enabled';
+      } else {
+        toggle.classList.remove('active');
+        statusText.textContent = 'Disabled';
+      }
+    }
+    
+    function toggleOAuth() {
+      oauthEnabled = !oauthEnabled;
+      updateOAuthToggle();
+    }
+    
+    async function saveOAuthSettings() {
+      const updates = {
+        enabled: oauthEnabled,
+        googleWebClientId: document.getElementById('oauth-web-client-id').value.trim(),
+        googleIosClientId: document.getElementById('oauth-ios-client-id').value.trim(),
+        googleAndroidClientId: document.getElementById('oauth-android-client-id').value.trim()
+      };
+      
+      try {
+        const res = await fetch('/api/admin/oauth-settings', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + sessionToken
+          },
+          body: JSON.stringify(updates)
+        });
+        
+        if (res.ok) {
+          showSuccess('OAuth settings saved successfully!');
+        } else {
+          showError('Failed to save OAuth settings');
+        }
+      } catch (err) {
+        showError('Connection error');
+      }
+    }
+    
+    // Referral Settings
+    let referralEnabled = true;
+    
+    async function loadReferralData() {
+      await Promise.all([loadReferralSettings(), loadReferralStats(), loadReferralHistory(), loadBounties()]);
+    }
+    
+    async function loadReferralSettings() {
+      try {
+        const res = await fetch('/api/admin/referral-settings', {
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const settings = data.settings;
+          referralEnabled = settings.enabled;
+          document.getElementById('referral-inviter-credits').value = settings.inviterCredits || 25;
+          document.getElementById('referral-invitee-credits').value = settings.inviteeCredits || 25;
+          updateReferralToggle();
+        }
+      } catch (err) {
+        console.error('Failed to load referral settings:', err);
+      }
+    }
+    
+    async function loadReferralStats() {
+      try {
+        const res = await fetch('/api/admin/referral-stats', {
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const stats = data.stats;
+          document.getElementById('referral-total').textContent = stats.totalReferrals || 0;
+          document.getElementById('referral-credits-awarded').textContent = stats.totalCreditsAwarded || 0;
+          document.getElementById('referral-top-referrer').textContent = stats.topReferrerEmail || 'N/A';
+        }
+      } catch (err) {
+        console.error('Failed to load referral stats:', err);
+      }
+    }
+    
+    async function loadReferralHistory() {
+      try {
+        const res = await fetch('/api/admin/referral-history?limit=20', {
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const tbody = document.getElementById('referral-history-body');
+          
+          if (data.history.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">No referrals yet</td></tr>';
+            return;
+          }
+          
+          tbody.innerHTML = data.history.map(r => `
+            <tr>
+              <td>${new Date(r.createdAt).toLocaleDateString()}</td>
+              <td>${r.inviterEmail}</td>
+              <td>${r.inviteeEmail}</td>
+              <td>${r.inviterCreditsAwarded} + ${r.inviteeCreditsAwarded}</td>
+              <td><span class="badge ${r.status === 'completed' ? 'badge-success' : 'badge-warning'}">${r.status}</span></td>
+            </tr>
+          `).join('');
+        }
+      } catch (err) {
+        console.error('Failed to load referral history:', err);
+        document.getElementById('referral-history-body').innerHTML = '<tr><td colspan="5" style="text-align: center;">Failed to load</td></tr>';
+      }
+    }
+    
+    function updateReferralToggle() {
+      const toggle = document.getElementById('referral-enabled');
+      const statusText = document.getElementById('referral-status-text');
+      if (referralEnabled) {
+        toggle.classList.add('active');
+        statusText.textContent = 'Enabled';
+      } else {
+        toggle.classList.remove('active');
+        statusText.textContent = 'Disabled';
+      }
+    }
+    
+    function toggleReferralEnabled() {
+      referralEnabled = !referralEnabled;
+      updateReferralToggle();
+    }
+    
+    async function saveReferralSettings() {
+      const updates = {
+        enabled: referralEnabled,
+        inviterCredits: parseInt(document.getElementById('referral-inviter-credits').value),
+        inviteeCredits: parseInt(document.getElementById('referral-invitee-credits').value)
+      };
+      
+      try {
+        const res = await fetch('/api/admin/referral-settings', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + sessionToken
+          },
+          body: JSON.stringify(updates)
+        });
+        
+        if (res.ok) {
+          showSuccess('Referral settings saved successfully!');
+        } else if (res.status === 401) {
+          showError('Session expired. Redirecting to login...');
+          setTimeout(() => { logout(); }, 1500);
+        } else {
+          showError('Failed to save referral settings');
+        }
+      } catch (err) {
+        showError('Connection error');
+      }
+    }
+    
+    async function loadBounties() {
+      try {
+        const res = await fetch('/api/admin/referral-bounties', {
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const tbody = document.getElementById('bounties-body');
+          
+          if (!data.bounties || data.bounties.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">No active bounties</td></tr>';
+            return;
+          }
+          
+          tbody.innerHTML = data.bounties.map(b => `
+            <tr>
+              <td>${b.userEmail || 'Unknown'}</td>
+              <td>+${b.bonusCredits}</td>
+              <td>${new Date(b.expiresAt).toLocaleString()}</td>
+              <td>${b.description || '-'}</td>
+              <td>
+                <button class="btn btn-danger btn-sm" onclick="deleteBounty(${b.id})" style="padding: 4px 12px; font-size: 12px;">Delete</button>
+              </td>
+            </tr>
+          `).join('');
+        }
+      } catch (err) {
+        console.error('Failed to load bounties:', err);
+        document.getElementById('bounties-body').innerHTML = '<tr><td colspan="5" style="text-align: center;">Failed to load</td></tr>';
+      }
+    }
+    
+    async function createBounty() {
+      const email = document.getElementById('bounty-user-email').value.trim();
+      const bonusCredits = parseInt(document.getElementById('bounty-credits').value);
+      const expiresAt = document.getElementById('bounty-expires').value;
+      const description = document.getElementById('bounty-description').value.trim();
+      
+      if (!email) {
+        showError('Please enter a user email');
+        return;
+      }
+      if (!expiresAt) {
+        showError('Please select an expiration date');
+        return;
+      }
+      
+      try {
+        const res = await fetch('/api/admin/referral-bounties', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + sessionToken
+          },
+          body: JSON.stringify({
+            name: description || 'Referral Bounty',
+            description: description,
+            userEmail: email,
+            bonusInviterCredits: bonusCredits,
+            bonusInviteeCredits: 0,
+            startsAt: new Date().toISOString(),
+            endsAt: new Date(expiresAt).toISOString()
+          })
+        });
+        
+        if (res.ok) {
+          showSuccess('Bounty created successfully!');
+          document.getElementById('bounty-user-email').value = '';
+          document.getElementById('bounty-credits').value = '50';
+          document.getElementById('bounty-expires').value = '';
+          document.getElementById('bounty-description').value = '';
+          loadBounties();
+        } else {
+          const data = await res.json();
+          showError(data.message || 'Failed to create bounty');
+        }
+      } catch (err) {
+        showError('Connection error');
+      }
+    }
+    
+    async function deleteBounty(bountyId) {
+      if (!confirm('Are you sure you want to delete this bounty?')) return;
+      
+      try {
+        const res = await fetch('/api/admin/referral-bounties/' + bountyId, {
+          method: 'DELETE',
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        
+        if (res.ok) {
+          showSuccess('Bounty deleted');
+          loadBounties();
+        } else {
+          showError('Failed to delete bounty');
+        }
+      } catch (err) {
+        showError('Connection error');
+      }
+    }
+    
+    // Audit Logs
+    let auditPage = 0;
+    const auditPageSize = 20;
+    let auditTotal = 0;
+    
+    async function loadAuditLogs() {
+      const action = document.getElementById('audit-action-filter').value;
+      try {
+        let url = `/api/admin/audit-logs?limit=${auditPageSize}&offset=${auditPage * auditPageSize}`;
+        if (action) url += `&action=${action}`;
+        
+        const res = await fetch(url, {
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          auditTotal = data.total || 0;
+          renderAuditLogs(data.logs || []);
+          updateAuditPagination();
+        }
+      } catch (err) {
+        console.error('Failed to load audit logs:', err);
+      }
+    }
+    
+    function renderAuditLogs(logs) {
+      const tbody = document.getElementById('audit-logs-list');
+      if (logs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: #666;">No audit logs found</td></tr>';
+        return;
+      }
+      
+      tbody.innerHTML = logs.map(log => {
+        const time = new Date(log.createdAt).toLocaleString();
+        const actionClass = getActionClass(log.action);
+        const details = getLogDetails(log);
+        return `
+          <tr>
+            <td style="font-size: 12px;">${time}</td>
+            <td style="font-size: 12px;">${log.userEmail || log.userId || '-'}</td>
+            <td><span class="status-badge ${actionClass}">${formatAction(log.action)}</span></td>
+            <td>${log.status}</td>
+            <td>${log.creditsUsed || '-'}</td>
+            <td>${log.style || '-'}</td>
+            <td style="font-size: 11px; max-width: 150px; overflow: hidden; text-overflow: ellipsis;" title="${details}">${details}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+    
+    function getActionClass(action) {
+      switch (action) {
+        case 'generation_started': return 'status-enabled';
+        case 'generation_completed': return 'status-enabled';
+        case 'generation_failed': return 'status-disabled';
+        case 'rate_limited': return 'status-disabled';
+        case 'insufficient_credits': return 'status-disabled';
+        default: return '';
+      }
+    }
+    
+    function formatAction(action) {
+      switch (action) {
+        case 'generation_started': return 'Started';
+        case 'generation_completed': return 'Completed';
+        case 'generation_failed': return 'Failed';
+        case 'rate_limited': return 'Rate Limited';
+        case 'insufficient_credits': return 'No Credits';
+        default: return action;
+      }
+    }
+    
+    function getLogDetails(log) {
+      if (log.errorMessage) return log.errorMessage;
+      if (log.metadata) {
+        try {
+          const meta = typeof log.metadata === 'string' ? JSON.parse(log.metadata) : log.metadata;
+          if (meta.title) return meta.title;
+          if (meta.jobId) return 'Job: ' + meta.jobId.substring(0, 8);
+        } catch (e) {}
+      }
+      return log.pagesCount ? `${log.pagesCount} pages` : '-';
+    }
+    
+    function updateAuditPagination() {
+      const totalPages = Math.ceil(auditTotal / auditPageSize);
+      document.getElementById('audit-page-info').textContent = `Page ${auditPage + 1} of ${totalPages || 1}`;
+      document.getElementById('audit-prev-btn').disabled = auditPage === 0;
+      document.getElementById('audit-next-btn').disabled = auditPage >= totalPages - 1;
+    }
+    
+    function auditPrevPage() {
+      if (auditPage > 0) {
+        auditPage--;
+        loadAuditLogs();
+      }
+    }
+    
+    function auditNextPage() {
+      const totalPages = Math.ceil(auditTotal / auditPageSize);
+      if (auditPage < totalPages - 1) {
+        auditPage++;
+        loadAuditLogs();
+      }
+    }
+    
+    async function refreshAuditStats() {
+      try {
+        const res = await fetch('/api/admin/audit-stats', {
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const stats = data.stats;
+          document.getElementById('audit-total-generations').textContent = stats.totalGenerations;
+          document.getElementById('audit-successful').textContent = stats.successfulGenerations;
+          document.getElementById('audit-failed').textContent = stats.failedGenerations;
+          document.getElementById('audit-rate-limited').textContent = stats.rateLimitedAttempts;
+          document.getElementById('audit-insufficient-credits').textContent = stats.insufficientCreditsAttempts;
+          document.getElementById('audit-last-24h').textContent = stats.last24Hours;
+        }
+      } catch (err) {
+        console.error('Failed to load audit stats:', err);
+      }
+    }
+    
+    // Users
+    async function loadUsers() {
+      try {
+        const res = await fetch('/api/admin/users', {
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          usersData = data.users || [];
+          renderUsers();
+        }
+      } catch (err) {
+        console.error('Failed to load users:', err);
+      }
+    }
+    
+    function renderUsers() {
+      const tbody = document.getElementById('users-list');
+      tbody.innerHTML = usersData.map(u => `
+        <tr>
+          <td class="user-email">${u.email}</td>
+          <td class="user-id">${u.userId}</td>
+          <td class="credits-display">${u.credits}</td>
+          <td>
+            <span class="verified-badge ${u.emailVerified ? 'verified-yes' : 'verified-no'}">
+              ${u.emailVerified ? 'Yes' : 'No'}
+            </span>
+          </td>
+          <td>${u.subscriptionStatus || 'none'}</td>
+          <td>${new Date(u.createdAt).toLocaleDateString()}</td>
+          <td>
+            <button class="edit-credits-btn" onclick="openEditModal('${u.id}')">Edit</button>
+          </td>
+        </tr>
+      `).join('');
+    }
+    
+    function openEditModal(userId) {
+      const user = usersData.find(u => u.id === userId);
+      if (!user) return;
+      
+      document.getElementById('edit-user-id').value = user.id;
+      document.getElementById('edit-user-email').value = user.email;
+      document.getElementById('edit-user-credits').value = user.credits;
+      document.getElementById('edit-user-subscription').value = user.subscriptionStatus || 'none';
+      document.getElementById('edit-user-modal').classList.add('active');
+    }
+    
+    function closeEditModal() {
+      document.getElementById('edit-user-modal').classList.remove('active');
+    }
+    
+    async function saveUserEdit() {
+      const userId = document.getElementById('edit-user-id').value;
+      const credits = parseInt(document.getElementById('edit-user-credits').value);
+      const subscriptionStatus = document.getElementById('edit-user-subscription').value;
+      
+      try {
+        const res = await fetch(`/api/admin/users/${userId}/update`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + sessionToken
+          },
+          body: JSON.stringify({ credits, subscriptionStatus })
+        });
+        
+        if (res.ok) {
+          closeEditModal();
+          loadUsers();
+          showSuccess('User updated successfully!');
+        } else {
+          showError('Failed to update user');
+        }
+      } catch (err) {
+        showError('Connection error');
+      }
+    }
+    
+    async function openRevokeStylesModal() {
+      const userId = document.getElementById('edit-user-id').value;
+      if (!userId) return;
+      const userEmail = document.getElementById('edit-user-email').value;
+      document.getElementById('revoke-styles-user').textContent = 'User: ' + userEmail + ' (' + userId + ')';
+      document.getElementById('revoke-styles-loading').style.display = 'block';
+      document.getElementById('revoke-styles-list').style.display = 'none';
+      document.getElementById('revoke-styles-modal').classList.add('active');
+
+      try {
+        const res = await fetch(`/api/admin/users/${userId}/unlocked-styles`, {
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+        renderRevokeStylesList(data, userId);
+      } catch (err) {
+        document.getElementById('revoke-styles-loading').textContent = 'Error loading styles';
+      }
+    }
+
+    function renderRevokeStylesList(data, userId) {
+      const { unlocked, allUnlocked, allStyles } = data;
+      const container = document.getElementById('revoke-styles-list');
+      const revokeAllBtn = document.getElementById('revoke-all-btn');
+
+      if (unlocked.length === 0) {
+        container.innerHTML = '<p style="text-align:center;color:#888;">No unlocked styles for this user.</p>';
+        revokeAllBtn.style.display = 'none';
+      } else {
+        revokeAllBtn.style.display = 'inline-block';
+        let html = '<div style="max-height:300px;overflow-y:auto;">';
+        if (allUnlocked) {
+          html += '<div style="padding:10px;background:#fef3c7;border-radius:8px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">'
+            + '<span><strong>All Styles Pass</strong> (unlimited access)</span>'
+            + '</div>';
+        }
+        for (const entry of unlocked) {
+          if (entry.allStylesUnlocked) continue;
+          const style = allStyles.find(s => s.id === entry.styleId);
+          const name = style ? style.name : 'Style #' + entry.styleId;
+          html += '<div style="padding:10px;background:#f3f4f6;border-radius:8px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;">'
+            + '<span>' + name + '</span>'
+            + '<button class="btn" style="background:#e74c3c;color:#fff;padding:4px 12px;font-size:12px;" onclick="revokeStyle(\'' + userId + '\',' + entry.styleId + ')">Revoke</button>'
+            + '</div>';
+        }
+        html += '</div>';
+        container.innerHTML = html;
+      }
+
+      document.getElementById('revoke-styles-loading').style.display = 'none';
+      container.style.display = 'block';
+    }
+
+    function closeRevokeStylesModal() {
+      document.getElementById('revoke-styles-modal').classList.remove('active');
+    }
+
+    async function revokeStyle(userId, styleId) {
+      if (!confirm('Revoke this style from user?')) return;
+      try {
+        const res = await fetch(`/api/admin/users/${userId}/revoke-style`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+          body: JSON.stringify({ styleId })
+        });
+        if (res.ok) {
+          showSuccess('Style revoked');
+          openRevokeStylesModal();
+        } else {
+          showError('Failed to revoke style');
+        }
+      } catch (err) {
+        showError('Connection error');
+      }
+    }
+
+    async function revokeAllStyles() {
+      const userId = document.getElementById('edit-user-id').value;
+      if (!confirm('Revoke ALL unlocked styles from this user?')) return;
+      try {
+        const res = await fetch(`/api/admin/users/${userId}/revoke-all-styles`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (res.ok) {
+          showSuccess('All styles revoked');
+          openRevokeStylesModal();
+        } else {
+          showError('Failed to revoke styles');
+        }
+      } catch (err) {
+        showError('Connection error');
+      }
+    }
+
+    // Provider Settings
+    async function loadSettings() {
+      try {
+        const res = await fetch('/api/admin/settings', {
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (res.ok) {
+          settings = await res.json();
+          renderProviders();
+          updateGenerationModeUI();
+          updatePanelProviderUI();
+          updateFallbackProviderUI();
+          updateTextProviderUI();
+        } else if (res.status === 401) {
+          logout();
+        }
+      } catch (err) {
+        console.error('Failed to load settings:', err);
+      }
+    }
+    
+    function updateGenerationModeUI() {
+      const mode = settings.comicGenerationMode || 'multi-model';
+      const multiModelRadio = document.querySelector('input[name="genMode"][value="multi-model"]');
+      const geminiFullpageRadio = document.querySelector('input[name="genMode"][value="gemini-fullpage"]');
+      
+      if (multiModelRadio) multiModelRadio.checked = mode === 'multi-model';
+      if (geminiFullpageRadio) geminiFullpageRadio.checked = mode === 'gemini-fullpage';
+      
+      const warning = document.getElementById('gen-mode-warning');
+      if (warning) {
+        if (mode === 'gemini-fullpage') {
+          const geminiKey = (settings.geminiImage && settings.geminiImage.apiKey) || (settings.storyTextProvider && settings.storyTextProvider.geminiApiKey);
+          const hasKey = geminiKey && geminiKey.length > 4;
+          warning.style.display = hasKey ? 'none' : 'block';
+        } else {
+          warning.style.display = 'none';
+        }
+      }
+    }
+    
+    async function setGenerationMode(mode) {
+      settings.comicGenerationMode = mode;
+      updateGenerationModeUI();
+      await saveSettings();
+    }
+    
+    function updatePanelProviderUI() {
+      const provider = settings.panelGenerationProvider || 'siliconflow';
+      const siliconflowRadio = document.querySelector('input[name="panelProvider"][value="siliconflow"]');
+      const flux2proRadio = document.querySelector('input[name="panelProvider"][value="flux2pro"]');
+      const geminiRadio = document.querySelector('input[name="panelProvider"][value="gemini"]');
+      
+      if (siliconflowRadio) siliconflowRadio.checked = provider === 'siliconflow';
+      if (flux2proRadio) flux2proRadio.checked = provider === 'flux2pro';
+      if (geminiRadio) geminiRadio.checked = provider === 'gemini';
+      
+      // Show warning if selected provider isn't properly configured
+      const warning = document.getElementById('panel-provider-warning');
+      if (warning) {
+        let isConfigured = false;
+        if (provider === 'gemini') {
+          const geminiKey = (settings.geminiImage && settings.geminiImage.apiKey) || (settings.storyTextProvider && settings.storyTextProvider.geminiApiKey);
+          isConfigured = settings.geminiImage && settings.geminiImage.enabled && geminiKey && geminiKey.length > 4;
+        } else {
+          const selectedConfig = settings[provider];
+          isConfigured = selectedConfig && selectedConfig.enabled && selectedConfig.apiKey && selectedConfig.apiKey.length > 4;
+        }
+        warning.style.display = isConfigured ? 'none' : 'block';
+      }
+    }
+    
+    async function setPanelProvider(provider) {
+      settings.panelGenerationProvider = provider;
+      updatePanelProviderUI();
+      await saveSettings();
+    }
+    
+    function updateFallbackProviderUI() {
+      const fallbackSelect = document.getElementById('fallback-provider-select');
+      if (fallbackSelect) {
+        fallbackSelect.value = settings.fallbackProvider || '';
+      }
+      
+      // Show warning if fallback provider doesn't have API key
+      const warning = document.getElementById('fallback-provider-warning');
+      if (warning && settings.fallbackProvider) {
+        const fallbackConfig = settings[settings.fallbackProvider];
+        const hasKey = fallbackConfig && fallbackConfig.apiKey && fallbackConfig.apiKey.length > 4;
+        warning.style.display = hasKey ? 'none' : 'block';
+      } else if (warning) {
+        warning.style.display = 'none';
+      }
+    }
+    
+    async function setFallbackProvider(provider) {
+      settings.fallbackProvider = provider || null;
+      updateFallbackProviderUI();
+      await saveSettings();
+    }
+    
+    function updateTextProviderUI() {
+      const tp = settings.storyTextProvider || { provider: 'openai', openaiModel: 'gpt-4o', geminiModel: 'gemini-2.0-flash', replicateModel: 'meta/meta-llama-3-70b-instruct' };
+      
+      const providers = ['openai', 'gemini', 'replicate'];
+      providers.forEach(p => {
+        const radio = document.querySelector(`input[name="textProvider"][value="${p}"]`);
+        if (radio) radio.checked = tp.provider === p;
+        const modelDiv = document.getElementById(`text-model-${p}`);
+        if (modelDiv) modelDiv.style.display = tp.provider === p ? 'block' : 'none';
+      });
+      
+      const openaiSelect = document.getElementById('text-openai-model');
+      if (openaiSelect) openaiSelect.value = tp.openaiModel || 'gpt-4o';
+      const geminiSelect = document.getElementById('text-gemini-model');
+      if (geminiSelect) geminiSelect.value = tp.geminiModel || 'gemini-2.0-flash';
+      const replicateSelect = document.getElementById('text-replicate-model');
+      if (replicateSelect) replicateSelect.value = tp.replicateModel || 'meta/meta-llama-3-70b-instruct';
+      
+      const geminiKeyInput = document.getElementById('text-gemini-apikey');
+      if (geminiKeyInput && tp.geminiApiKey) {
+        geminiKeyInput.value = tp.geminiApiKey.length > 4 ? '••••••••' + tp.geminiApiKey.slice(-4) : '';
+      }
+      
+      const statusDiv = document.getElementById('text-provider-status');
+      if (statusDiv) {
+        if (tp.provider === 'gemini' && (!tp.geminiApiKey || tp.geminiApiKey.length < 5)) {
+          statusDiv.style.display = 'block';
+          statusDiv.style.background = 'rgba(255,200,0,0.3)';
+          statusDiv.textContent = 'Gemini API key is required. Get one from Google AI Studio.';
+        } else if (tp.provider === 'replicate' && (!settings.replicate?.apiKey || settings.replicate.apiKey.length < 5)) {
+          statusDiv.style.display = 'block';
+          statusDiv.style.background = 'rgba(255,200,0,0.3)';
+          statusDiv.textContent = 'Replicate API key must be configured in the providers section below.';
+        } else {
+          statusDiv.style.display = 'none';
+        }
+      }
+    }
+    
+    async function setTextProvider(provider) {
+      if (!settings.storyTextProvider) {
+        settings.storyTextProvider = { provider: 'openai', openaiModel: 'gpt-4o', geminiModel: 'gemini-2.0-flash', geminiApiKey: '', replicateModel: 'meta/meta-llama-3-70b-instruct' };
+      }
+      settings.storyTextProvider.provider = provider;
+      updateTextProviderUI();
+      await saveSettings();
+    }
+    
+    async function setTextModel(provider, model) {
+      if (!settings.storyTextProvider) {
+        settings.storyTextProvider = { provider: 'openai', openaiModel: 'gpt-4o', geminiModel: 'gemini-2.0-flash', geminiApiKey: '', replicateModel: 'meta/meta-llama-3-70b-instruct' };
+      }
+      if (provider === 'openai') settings.storyTextProvider.openaiModel = model;
+      else if (provider === 'gemini') settings.storyTextProvider.geminiModel = model;
+      else if (provider === 'replicate') settings.storyTextProvider.replicateModel = model;
+      await saveSettings();
+    }
+    
+    async function saveGeminiApiKey() {
+      const input = document.getElementById('text-gemini-apikey');
+      const key = input.value.trim();
+      if (!key || key.startsWith('••')) return;
+      if (!settings.storyTextProvider) {
+        settings.storyTextProvider = { provider: 'gemini', openaiModel: 'gpt-4o', geminiModel: 'gemini-2.0-flash', geminiApiKey: '', replicateModel: 'meta/meta-llama-3-70b-instruct' };
+      }
+      settings.storyTextProvider.geminiApiKey = key;
+      await saveSettings();
+      input.value = '••••••••' + key.slice(-4);
+      showToast('Gemini API key saved');
+    }
+    
+    function renderProviders() {
+      const container = document.getElementById('providers-list');
+      container.innerHTML = PROVIDERS.map(p => {
+        const config = settings[p.id] || { enabled: false, apiKey: '', models: {} };
+        const isDefault = settings.defaultProvider === p.id;
+        const hasKey = config.apiKey && config.apiKey.length > 4;
+        
+        let modelsHtml = '';
+        if (p.id === 'replicate' && config.models) {
+          modelsHtml = `
+            <div class="models-section">
+              <div class="models-section-title">Available Models (enable at least one for generation)</div>
+              ${REPLICATE_MODELS.map(m => {
+                const modelConfig = config.models[m.id] || { enabled: false };
+                const isDefaultModel = config.defaultModel === m.id;
+                return `
+                  <div class="model-row">
+                    <div class="model-info">
+                      <div class="model-name">${m.name} ${isDefaultModel ? '<span style="color:#667eea;font-size:11px;">(Default)</span>' : ''}</div>
+                      <div class="model-cost">${m.desc} - ${m.cost}</div>
+                    </div>
+                    <div class="model-controls">
+                      <div class="toggle-small ${modelConfig.enabled ? 'active' : ''}" onclick="toggleModel('replicate', '${m.id}')" title="Enable/Disable"></div>
+                      <div class="default-radio ${isDefaultModel ? 'selected' : ''}" onclick="setDefaultModel('replicate', '${m.id}')" title="Set as default generation model"></div>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          `;
+        }
+        
+        if (p.id === 'siliconflow' && config.models) {
+          modelsHtml = `
+            <div class="models-section">
+              <div class="models-section-title">Available Models</div>
+              ${SILICONFLOW_MODELS.map(m => {
+                const modelConfig = config.models[m.id] || { enabled: false };
+                return `
+                  <div class="model-row">
+                    <div class="model-info">
+                      <div class="model-name">${m.name}</div>
+                      <div class="model-cost">${m.desc} - ${m.cost}</div>
+                    </div>
+                    <div class="model-controls">
+                      <div class="toggle-small ${modelConfig.enabled ? 'active' : ''}" onclick="toggleModel('siliconflow', '${m.id}')" title="Enable/Disable"></div>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          `;
+        }
+        
+        if (p.id === 'geminiImage') {
+          modelsHtml = `
+            <div class="info-box" style="margin-top: 12px; padding: 12px; background: #e8f4ff; border-radius: 8px; font-size: 13px;">
+              <strong>Note:</strong> If no API key is set here, the Gemini text API key from the Story Text Provider section will be used as a fallback.
+              Uses <code>gemini-2.5-flash-image</code> model.
+            </div>
+          `;
+        }
+        
+        if (p.id === 'flux2pro' && config.models) {
+          modelsHtml = `
+            <div class="models-section">
+              <div class="models-section-title">Available Models</div>
+              ${FLUX2PRO_MODELS.map(m => {
+                const modelConfig = config.models[m.id] || { enabled: false };
+                return `
+                  <div class="model-row">
+                    <div class="model-info">
+                      <div class="model-name">${m.name}</div>
+                      <div class="model-cost">${m.desc} - ${m.cost}</div>
+                    </div>
+                    <div class="model-controls">
+                      <div class="toggle-small ${modelConfig.enabled ? 'active' : ''}" onclick="toggleModel('flux2pro', '${m.id}')" title="Enable/Disable"></div>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+            <div class="info-box" style="margin-top: 12px; padding: 12px; background: #e8f4ff; border-radius: 8px; font-size: 13px;">
+              <strong>Note:</strong> FLUX.2 Pro uses your Replicate API key. Make sure Replicate is configured above.
+            </div>
+          `;
+        }
+        
+        return `
+          <div class="provider-card ${isDefault ? 'default' : ''}" data-id="${p.id}">
+            <div class="provider-header">
+              <div>
+                <span class="provider-name">${p.name}</span>
+                ${isDefault ? '<span class="default-badge">Default</span>' : ''}
+              </div>
+              <span class="status-badge ${config.enabled ? 'status-enabled' : 'status-disabled'}">
+                ${config.enabled ? 'Enabled' : 'Disabled'}
+              </span>
+            </div>
+            <div class="provider-desc">${p.desc}</div>
+            <div class="api-key-row">
+              <input type="password" id="key-${p.id}" placeholder="API Key" value="${hasKey ? config.apiKey : ''}">
+              <button class="btn-small btn-save" onclick="saveKey('${p.id}')">Save</button>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div class="toggle-container">
+                <div class="toggle ${config.enabled ? 'active' : ''}" onclick="toggleProvider('${p.id}')"></div>
+                <span style="font-size: 13px; color: #666;">Enabled</span>
+              </div>
+              <button class="btn-small btn-default" onclick="setDefault('${p.id}')" ${isDefault || !hasKey ? 'disabled' : ''}>
+                ${isDefault ? 'Current Default' : 'Set as Default'}
+              </button>
+            </div>
+            ${modelsHtml}
+          </div>
+        `;
+      }).join('');
+    }
+    
+    async function saveKey(providerId) {
+      const key = document.getElementById('key-' + providerId).value.trim();
+      if (!key || key.startsWith('****')) return;
+      
+      if (!settings[providerId]) {
+        settings[providerId] = { enabled: false, apiKey: '', models: {} };
+      }
+      settings[providerId].apiKey = key;
+      settings[providerId].enabled = true;
+      await saveSettings();
+    }
+    
+    async function toggleProvider(providerId) {
+      if (!settings[providerId]) {
+        settings[providerId] = { enabled: false, apiKey: '', models: {} };
+      }
+      settings[providerId].enabled = !settings[providerId].enabled;
+      await saveSettings();
+    }
+    
+    async function setDefault(providerId) {
+      settings.defaultProvider = providerId;
+      settings.openai.isDefault = providerId === 'openai';
+      settings.replicate.isDefault = providerId === 'replicate';
+      settings.stability.isDefault = providerId === 'stability';
+      await saveSettings();
+    }
+    
+    async function toggleModel(providerId, modelId) {
+      if (!settings[providerId].models) {
+        settings[providerId].models = {};
+      }
+      if (!settings[providerId].models[modelId]) {
+        settings[providerId].models[modelId] = { enabled: false };
+      }
+      settings[providerId].models[modelId].enabled = !settings[providerId].models[modelId].enabled;
+      await saveSettings();
+    }
+    
+    async function setDefaultModel(providerId, modelId) {
+      if (!settings[providerId].models[modelId] || !settings[providerId].models[modelId].enabled) {
+        alert('Please enable the model first before setting it as default.');
+        return;
+      }
+      settings[providerId].defaultModel = modelId;
+      await saveSettings();
+    }
+    
+    async function saveSettings() {
+      try {
+        const res = await fetch('/api/admin/settings', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + sessionToken
+          },
+          body: JSON.stringify(settings)
+        });
+        
+        if (res.ok) {
+          showSuccess('Settings saved successfully!');
+          loadSettings();
+        } else if (res.status === 401) {
+          showError('Session expired. Redirecting to login...');
+          setTimeout(() => { logout(); }, 1500);
+        } else {
+          throw new Error('Failed to save');
+        }
+      } catch (err) {
+        showError('Failed to save settings');
+      }
+    }
+    
+    // ===== Internal Ads Functions =====
+    let adsEnabled = false;
+    let adsExemptSubscribers = true;
+    
+    async function loadAdSettings() {
+      try {
+        const res = await fetch('/api/admin/ad-settings', {
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (res.ok) {
+          const settings = await res.json();
+          adsEnabled = settings.enabled;
+          adsExemptSubscribers = settings.exemptSubscribers;
+          document.getElementById('ads-max-per-hour').value = settings.maxImpressionsPerHour || 3;
+          document.getElementById('ads-max-per-day').value = settings.maxImpressionsPerDay || 10;
+          updateAdsToggle();
+          updateAdsExemptToggle();
+        }
+      } catch (err) {
+        console.error('Failed to load ad settings:', err);
+      }
+    }
+    
+    function updateAdsToggle() {
+      const toggle = document.getElementById('ads-enabled');
+      const text = document.getElementById('ads-status-text');
+      if (adsEnabled) {
+        toggle.classList.add('active');
+        text.textContent = 'Enabled';
+      } else {
+        toggle.classList.remove('active');
+        text.textContent = 'Disabled';
+      }
+    }
+    
+    function updateAdsExemptToggle() {
+      const toggle = document.getElementById('ads-exempt-subscribers');
+      const text = document.getElementById('ads-exempt-text');
+      if (adsExemptSubscribers) {
+        toggle.classList.add('active');
+        text.textContent = 'Yes';
+      } else {
+        toggle.classList.remove('active');
+        text.textContent = 'No';
+      }
+    }
+    
+    function toggleAds() {
+      adsEnabled = !adsEnabled;
+      updateAdsToggle();
+    }
+    
+    function toggleAdsExemptSubscribers() {
+      adsExemptSubscribers = !adsExemptSubscribers;
+      updateAdsExemptToggle();
+    }
+    
+    async function saveAdSettings() {
+      const maxPerHour = parseInt(document.getElementById('ads-max-per-hour').value) || 3;
+      const maxPerDay = parseInt(document.getElementById('ads-max-per-day').value) || 10;
+      
+      try {
+        const res = await fetch('/api/admin/ad-settings', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + sessionToken,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            enabled: adsEnabled,
+            exemptSubscribers: adsExemptSubscribers,
+            maxImpressionsPerHour: maxPerHour,
+            maxImpressionsPerDay: maxPerDay
+          })
+        });
+        if (res.ok) {
+          showSuccess('Ad settings saved!');
+        } else {
+          showError('Failed to save ad settings');
+        }
+      } catch (err) {
+        showError('Failed to save ad settings');
+      }
+    }
+    
+    function updateAdForm() {
+      const type = document.getElementById('new-ad-type').value;
+      const contentContainer = document.getElementById('new-ad-content-container');
+      const imageContainer = document.getElementById('new-ad-image-container');
+      
+      if (type === 'text') {
+        contentContainer.style.display = 'block';
+        imageContainer.style.display = 'none';
+      } else {
+        contentContainer.style.display = 'none';
+        imageContainer.style.display = 'block';
+      }
+    }
+    
+    async function createAd() {
+      const type = document.getElementById('new-ad-type').value;
+      const title = document.getElementById('new-ad-title').value.trim();
+      const content = document.getElementById('new-ad-content').value.trim();
+      const imageUrl = document.getElementById('new-ad-image').value.trim();
+      const linkUrl = document.getElementById('new-ad-link').value.trim();
+      
+      if (!title) {
+        showError('Please enter an ad title');
+        return;
+      }
+      
+      if (type === 'text' && !content) {
+        showError('Please enter ad content text');
+        return;
+      }
+      
+      if (type === 'banner' && !imageUrl) {
+        showError('Please enter an image URL for the banner');
+        return;
+      }
+      
+      try {
+        const res = await fetch('/api/admin/ads', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + sessionToken,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            type,
+            title,
+            content: type === 'text' ? content : null,
+            imageUrl: type === 'banner' ? imageUrl : null,
+            linkUrl: linkUrl || null,
+            isActive: true
+          })
+        });
+        if (res.ok) {
+          showSuccess('Ad created!');
+          document.getElementById('new-ad-title').value = '';
+          document.getElementById('new-ad-content').value = '';
+          document.getElementById('new-ad-image').value = '';
+          document.getElementById('new-ad-link').value = '';
+          loadAds();
+        } else {
+          const data = await res.json();
+          showError(data.error || 'Failed to create ad');
+        }
+      } catch (err) {
+        showError('Failed to create ad');
+      }
+    }
+    
+    async function loadAds() {
+      try {
+        const res = await fetch('/api/admin/ads', {
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const tbody = document.getElementById('ads-list');
+          
+          if (!data.ads || data.ads.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">No ads created yet</td></tr>';
+            return;
+          }
+          
+          tbody.innerHTML = data.ads.map(ad => `
+            <tr>
+              <td><span class="badge ${ad.type === 'banner' ? 'badge-primary' : 'badge-secondary'}">${ad.type}</span></td>
+              <td>${ad.title}</td>
+              <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                ${ad.type === 'text' ? (ad.content || '-') : (ad.imageUrl ? '<a href="' + ad.imageUrl + '" target="_blank">View Image</a>' : '-')}
+              </td>
+              <td>
+                <span class="badge ${ad.isActive ? 'badge-success' : 'badge-danger'}">${ad.isActive ? 'Active' : 'Inactive'}</span>
+              </td>
+              <td>
+                <button class="btn ${ad.isActive ? 'btn-warning' : 'btn-success'}" style="padding: 4px 8px; font-size: 12px; margin-right: 4px;" onclick="toggleAdStatus(${ad.id}, ${!ad.isActive})">${ad.isActive ? 'Disable' : 'Enable'}</button>
+                <button class="btn btn-danger" style="padding: 4px 8px; font-size: 12px;" onclick="deleteAd(${ad.id})">Delete</button>
+              </td>
+            </tr>
+          `).join('');
+        }
+      } catch (err) {
+        console.error('Failed to load ads:', err);
+        document.getElementById('ads-list').innerHTML = '<tr><td colspan="5" style="text-align: center;">Failed to load</td></tr>';
+      }
+    }
+    
+    async function toggleAdStatus(adId, newStatus) {
+      try {
+        const res = await fetch('/api/admin/ads/' + adId, {
+          method: 'PUT',
+          headers: {
+            'Authorization': 'Bearer ' + sessionToken,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ isActive: newStatus })
+        });
+        if (res.ok) {
+          showSuccess('Ad status updated!');
+          loadAds();
+        } else {
+          showError('Failed to update ad');
+        }
+      } catch (err) {
+        showError('Failed to update ad');
+      }
+    }
+    
+    async function deleteAd(adId) {
+      if (!confirm('Are you sure you want to delete this ad?')) return;
+      
+      try {
+        const res = await fetch('/api/admin/ads/' + adId, {
+          method: 'DELETE',
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (res.ok) {
+          showSuccess('Ad deleted!');
+          loadAds();
+        } else {
+          showError('Failed to delete ad');
+        }
+      } catch (err) {
+        showError('Failed to delete ad');
+      }
+    }
+    
+    // ===== Push Notifications Functions =====
+    async function loadNotificationSettings() {
+      try {
+        const res = await fetch('/api/admin/notification-settings', {
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          document.getElementById('notif-enabled').checked = data.enabled;
+          document.getElementById('notif-low-credits-threshold').value = data.lowCreditsThreshold || 20;
+          document.getElementById('notif-active-devices').textContent = data.activeDevices || 0;
+        }
+      } catch (err) {
+        console.error('Failed to load notification settings:', err);
+      }
+    }
+    
+    async function saveNotificationSettings() {
+      try {
+        const enabled = document.getElementById('notif-enabled').checked;
+        const lowCreditsThreshold = parseInt(document.getElementById('notif-low-credits-threshold').value) || 20;
+        
+        const res = await fetch('/api/admin/notification-settings', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + sessionToken
+          },
+          body: JSON.stringify({ enabled, lowCreditsThreshold })
+        });
+        
+        if (res.ok) {
+          showSuccess('Notification settings saved!');
+        } else {
+          showError('Failed to save notification settings');
+        }
+      } catch (err) {
+        showError('Failed to save notification settings');
+      }
+    }
+    
+    async function loadNotificationHistory() {
+      try {
+        const res = await fetch('/api/admin/notification-history?limit=50', {
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const tbody = document.getElementById('notification-history-list');
+          
+          if (data.history.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4">No notifications sent yet.</td></tr>';
+            return;
+          }
+          
+          tbody.innerHTML = data.history.map(n => {
+            const date = new Date(n.createdAt).toLocaleString();
+            const statusClass = n.status === 'sent' ? 'style="color: green;"' : 'style="color: red;"';
+            return `<tr>
+              <td>${date}</td>
+              <td>${n.type}</td>
+              <td>${n.title}</td>
+              <td ${statusClass}>${n.status}</td>
+            </tr>`;
+          }).join('');
+        }
+      } catch (err) {
+        console.error('Failed to load notification history:', err);
+      }
+    }
+    
+    async function sendBroadcast() {
+      const title = document.getElementById('broadcast-title').value.trim();
+      const body = document.getElementById('broadcast-body').value.trim();
+      
+      if (!title || !body) {
+        showError('Title and message are required');
+        return;
+      }
+      
+      if (!confirm('Send this notification to ALL users with active devices?')) {
+        return;
+      }
+      
+      try {
+        const res = await fetch('/api/admin/notifications/broadcast', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + sessionToken
+          },
+          body: JSON.stringify({ title, body })
+        });
+        
+        const data = await res.json();
+        
+        if (res.ok && data.success) {
+          showSuccess(`Broadcast sent! ${data.sent} delivered, ${data.failed} failed.`);
+          document.getElementById('broadcast-title').value = '';
+          document.getElementById('broadcast-body').value = '';
+          loadNotificationHistory();
+        } else {
+          showError(data.error || 'Failed to send broadcast');
+        }
+      } catch (err) {
+        showError('Failed to send broadcast');
+      }
+    }
+    
+    async function loadArtStyles() {
+      try {
+        const res = await fetch('/api/admin/art-styles', {
+          headers: { 'Authorization': `Bearer ${sessionToken}` }
+        });
+        const data = await res.json();
+        
+        if (data.settings) {
+          document.getElementById('art-unlock-all-cost').value = data.settings.unlockAllCost || 500;
+        }
+        
+        const list = document.getElementById('art-styles-list');
+        if (!data.styles || data.styles.length === 0) {
+          list.innerHTML = '<tr><td colspan="5">No art styles found.</td></tr>';
+          return;
+        }
+        
+        list.innerHTML = data.styles.map(s => `
+          <tr>
+            <td><strong>${s.name}</strong></td>
+            <td>
+              <label style="cursor:pointer;">
+                <input type="checkbox" ${s.isPremium ? 'checked' : ''} 
+                  onchange="updateArtStyle(${s.id}, { isPremium: this.checked })">
+                ${s.isPremium ? 'Yes' : 'No'}
+              </label>
+            </td>
+            <td>
+              <input type="number" value="${s.unlockCost}" min="0" style="width:80px;" class="setting-input"
+                onchange="updateArtStyle(${s.id}, { unlockCost: parseInt(this.value) })">
+            </td>
+            <td>
+              <input type="number" value="${s.displayOrder}" min="0" style="width:60px;" class="setting-input"
+                onchange="updateArtStyle(${s.id}, { displayOrder: parseInt(this.value) })">
+            </td>
+            <td>
+              <span style="color: ${s.isPremium ? '#f59e0b' : '#22c55e'}; font-weight: 600;">
+                ${s.isPremium ? 'Premium' : 'Free'}
+              </span>
+            </td>
+          </tr>
+        `).join('');
+      } catch (err) {
+        showError('Failed to load art styles');
+      }
+    }
+    
+    async function updateArtStyle(id, updates) {
+      try {
+        const res = await fetch(`/api/admin/art-styles/${id}`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${sessionToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(updates)
+        });
+        if (res.ok) {
+          showSuccess('Art style updated');
+          loadArtStyles();
+        } else {
+          const data = await res.json();
+          showError(data.error || 'Failed to update art style');
+        }
+      } catch (err) {
+        showError('Failed to update art style');
+      }
+    }
+    
+    async function saveArtStyleSettings() {
+      try {
+        const unlockAllCost = parseInt(document.getElementById('art-unlock-all-cost').value);
+        const res = await fetch('/api/admin/art-style-settings', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${sessionToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ unlockAllCost })
+        });
+        if (res.ok) {
+          showSuccess('Art style settings saved');
+        } else {
+          const data = await res.json();
+          showError(data.error || 'Failed to save settings');
+        }
+      } catch (err) {
+        showError('Failed to save art style settings');
+      }
+    }
+    
+    function showSuccess(msg) {
+      const el = document.getElementById('save-success');
+      el.textContent = msg;
+      el.style.display = 'block';
+      setTimeout(() => { el.style.display = 'none'; }, 3000);
+    }
+    
+    function showError(msg) {
+      const el = document.getElementById('save-error');
+      el.textContent = msg;
+      el.style.display = 'block';
+      setTimeout(() => { el.style.display = 'none'; }, 3000);
+    }
+  </script>
+</body>
+</html>
