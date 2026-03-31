@@ -1,6 +1,24 @@
-import Expo, { ExpoPushMessage, ExpoPushTicket } from "expo-server-sdk";
+import expoSdk from "expo-server-sdk";
+import type { ExpoPushMessage, ExpoPushTicket } from "expo-server-sdk";
 import { storage } from "./storage";
 
+/**
+ * Node ESM + CJS interop: `import x from "expo-server-sdk"` often yields
+ * `{ default, Expo }`, not the class — `new x()` throws (Node 20 + ESM bundle).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function resolveExpoConstructor(): any {
+  const m = expoSdk as unknown;
+  if (typeof m === "function") return m;
+  if (m && typeof m === "object") {
+    const o = m as { default?: unknown; Expo?: unknown };
+    const C = o.default ?? o.Expo;
+    if (typeof C === "function") return C;
+  }
+  throw new Error("Could not load Expo client from expo-server-sdk");
+}
+
+const Expo = resolveExpoConstructor();
 const expo = new Expo();
 
 interface NotificationPayload {
