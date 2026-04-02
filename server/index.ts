@@ -312,15 +312,21 @@ function setupErrorHandler(app: express.Application) {
   setupErrorHandler(app);
 
   const port = parseInt(process.env.PORT || "5000", 10);
-  
-  server.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      log(`express server serving on port ${port}`);
-    },
-  );
+  const listenOptions: {
+    port: number;
+    host: string;
+    reusePort?: boolean;
+  } = {
+    port,
+    host: "0.0.0.0",
+  };
+
+  // Windows can throw ENOTSUP when reusePort is enabled.
+  if (process.platform !== "win32") {
+    listenOptions.reusePort = true;
+  }
+
+  server.listen(listenOptions, () => {
+    log(`express server serving on port ${port}`);
+  });
 })();
