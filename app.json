@@ -10,7 +10,10 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.aidynamiz.storiz"
+      "bundleIdentifier": "com.aidynamiz.storiz",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -57,6 +60,12 @@
     ],
     "experiments": {
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "7bf43c6b-f0bf-4068-b0b2-6be741707e34"
+      }
+    },
+    "owner": "semwaqass-organization"
   }
 }

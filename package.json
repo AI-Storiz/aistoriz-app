@@ -17,7 +17,9 @@
     "check:format": "prettier --check \"**/*.{js,ts,tsx,css,json}\"",
     "format": "prettier --write \"**/*.{js,ts,tsx,css,json}\"",
     "android": "expo run:android",
-    "ios": "expo run:ios"
+    "ios": "expo run:ios",
+    "build:apk": "eas build --platform android --profile preview",
+    "build:apk:release": "eas build --platform android --profile production"
   },
   "dependencies": {
     "@expo-google-fonts/nunito": "^0.4.2",
