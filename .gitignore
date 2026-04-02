@@ -1,6 +1,11 @@
 # dependencies
 node_modules/
 
+# Build output (IMPORTANT for your backend)
+server_dist/
+build/
+out/
+
 # Expo / React Native
 .expo/
 .expo-shared/
@@ -23,6 +28,7 @@ android/keystore.properties
 
 # logs
 *.log
+logs/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -39,3 +45,24 @@ Thumbs.db
 coverage/
 *.tmp
 *.swp
+
+# PM2 (production process manager)
+.pm2/
+
+# Runtime files
+pids/
+*.pid
+*.seed
+
+# Optional: lock files (only if needed, otherwise keep them)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
+# TypeScript
+*.tsbuildinfo
+
+# Misc
+.env.local
+.env.production
+.env.development
