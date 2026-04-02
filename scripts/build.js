@@ -38,8 +38,11 @@ function stripProtocol(domain) {
   return new URL(urlString).host;
 }
 
+/**
+ * Hostname where static Expo assets are served after deploy (manifest URLs, etc.).
+ * Prefer EXPO_STATIC_DEPLOY_HOST when the app shell and API use different hosts.
+ */
 function getDeploymentDomain() {
-  // Check Replit deployment environment variables first
   if (process.env.REPLIT_INTERNAL_APP_DOMAIN) {
     return stripProtocol(process.env.REPLIT_INTERNAL_APP_DOMAIN);
   }
@@ -48,14 +51,35 @@ function getDeploymentDomain() {
     return stripProtocol(process.env.REPLIT_DEV_DOMAIN);
   }
 
-  if (process.env.EXPO_PUBLIC_DOMAIN) {
-    return stripProtocol(process.env.EXPO_PUBLIC_DOMAIN);
+  if (process.env.EXPO_STATIC_DEPLOY_HOST) {
+    return stripProtocol(process.env.EXPO_STATIC_DEPLOY_HOST);
+  }
+
+  if (process.env.EXPO_PUBLIC_API_URL) {
+    return stripProtocol(process.env.EXPO_PUBLIC_API_URL);
   }
 
   console.error(
-    "ERROR: No deployment domain found. Set REPLIT_INTERNAL_APP_DOMAIN, REPLIT_DEV_DOMAIN, or EXPO_PUBLIC_DOMAIN",
+    "ERROR: Set EXPO_PUBLIC_API_URL (required for the bundle), and optionally EXPO_STATIC_DEPLOY_HOST if static files are not on the API host. Replit: REPLIT_* vars also work.",
   );
   process.exit(1);
+}
+
+function normalizeExpoPublicApiUrl() {
+  const raw = process.env.EXPO_PUBLIC_API_URL?.trim();
+  if (!raw) {
+    console.error(
+      "ERROR: EXPO_PUBLIC_API_URL is required for static builds (e.g. https://api.example.com/).",
+    );
+    process.exit(1);
+  }
+  try {
+    const href = new URL(raw).href;
+    return href.endsWith("/") ? href : `${href}/`;
+  } catch {
+    console.error(`ERROR: Invalid EXPO_PUBLIC_API_URL: ${raw}`);
+    process.exit(1);
+  }
 }
 
 function prepareDirectories(timestamp) {
@@ -105,7 +129,7 @@ async function checkMetroHealth() {
   }
 }
 
-async function startMetro(expoPublicDomain) {
+async function startMetro(apiBaseUrl) {
   const isRunning = await checkMetroHealth();
   if (isRunning) {
     console.log("Metro already running");
@@ -113,10 +137,10 @@ async function startMetro(expoPublicDomain) {
   }
 
   console.log("Starting Metro...");
-  console.log(`Setting EXPO_PUBLIC_DOMAIN=${expoPublicDomain}`);
+  console.log(`Setting EXPO_PUBLIC_API_URL=${apiBaseUrl}`);
   const env = {
     ...process.env,
-    EXPO_PUBLIC_DOMAIN: expoPublicDomain,
+    EXPO_PUBLIC_API_URL: apiBaseUrl,
   };
   metroProcess = spawn("npm", ["run", "expo:start:static:build"], {
     stdio: ["ignore", "pipe", "pipe"],
@@ -500,6 +524,7 @@ async function main() {
 
   setupSignalHandlers();
 
+  const apiBaseUrl = normalizeExpoPublicApiUrl();
   const domain = getDeploymentDomain();
   const baseUrl = `https://${domain}`;
   const timestamp = `${Date.now()}-${process.pid}`;
@@ -507,7 +532,7 @@ async function main() {
   prepareDirectories(timestamp);
   clearMetroCache();
 
-  await startMetro(domain);
+  await startMetro(apiBaseUrl);
 
   const downloadTimeout = 300000;
   const downloadPromise = downloadBundlesAndManifests(timestamp);

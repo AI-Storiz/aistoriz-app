@@ -1,51 +1,72 @@
+import { getExpoGoProjectConfig } from "expo";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { Platform } from "react-native";
+
+function normalizeApiBaseUrl(raw: string): string {
+  const url = new URL(raw.trim());
+  return url.href.endsWith("/") ? url.href : `${url.href}/`;
+}
+
+function isLikelyLocalDevHost(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "10.0.2.2" ||
+    /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+    /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)
+  );
+}
 
 /**
- * Gets the base URL for the Express API server (e.g., "http://localhost:3000")
- * @returns {string} The API base URL
+ * Base URL for API `fetch` calls.
+ *
+ * Prefer `EXPO_PUBLIC_API_URL` in `.env` (inlined by Expo). Example:
+ * `https://aistorizapi.fiocreatives.com/`
+ *
+ * If unset, uses dev heuristics (web: localhost / Replit; native: Expo Go host or emulator).
  */
 export function getApiUrl(): string {
-  // On web, we need to determine the correct API URL
-  if (typeof window !== 'undefined' && window.location) {
+  const configured = process.env.EXPO_PUBLIC_API_URL?.trim();
+  if (configured) {
+    try {
+      return normalizeApiBaseUrl(configured);
+    } catch {
+      console.warn(
+        "[getApiUrl] Invalid EXPO_PUBLIC_API_URL; falling back to dev defaults.",
+      );
+    }
+  }
+
+  if (typeof window !== "undefined" && window.location) {
     const hostname = window.location.hostname;
     const protocol = window.location.protocol;
     const currentPort = window.location.port;
-    
-    // If already on port 5000, use same origin (correct server)
-    if (currentPort === '5000') {
-      return window.location.origin + '/';
+
+    if (currentPort === "5000") {
+      return `${window.location.origin}/`;
     }
-    
-    // On Replit dev domains not on port 5000, use port 5000
-    // External port 5000 maps to Express server directly
-    if (hostname.includes('.replit.dev') || hostname.includes('.repl.co')) {
+
+    if (hostname.includes(".replit.") || hostname.includes(".repl.co")) {
       return `${protocol}//${hostname}:5000/`;
     }
-    
-    // For localhost development, always use port 5000
-    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+
+    if (hostname === "localhost" || hostname === "127.0.0.1") {
       return `${protocol}//${hostname}:5000/`;
     }
-    
-    // For production (deployed), use same origin (Express serves everything)
-    return window.location.origin + '/';
-  }
-  
-  // For native apps, use the configured domain with port 5000
-  let host = process.env.EXPO_PUBLIC_DOMAIN;
 
-  if (!host) {
-    throw new Error("EXPO_PUBLIC_DOMAIN is not set");
+    return `${window.location.origin}/`;
   }
 
-  // Ensure port 5000 is used for native apps
-  if (!host.includes(':')) {
-    host = host + ':5000';
-  }
-  
-  let url = new URL(`https://${host}`);
+  const debuggerHost = getExpoGoProjectConfig()?.debuggerHost;
+  const hostWithPort = debuggerHost
+    ? `${debuggerHost.split(":")[0]}:5000`
+    : Platform.OS === "android"
+      ? "10.0.2.2:5000"
+      : "localhost:5000";
 
-  return url.href;
+  const hostPart = hostWithPort.split(":")[0] ?? "";
+  const proto = isLikelyLocalDevHost(hostPart) ? "http:" : "https:";
+  return `${proto}//${hostWithPort}/`;
 }
 
 async function throwIfResNotOk(res: Response) {

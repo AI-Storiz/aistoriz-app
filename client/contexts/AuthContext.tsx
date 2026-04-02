@@ -51,6 +51,30 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const AUTH_TOKEN_KEY = "@ai_storiz_auth_token";
 
+type ParseJsonResult<T> = { ok: true; data: T } | { ok: false; error: string };
+
+async function parseJsonResponse<T = Record<string, unknown>>(
+  response: Response,
+): Promise<ParseJsonResult<T>> {
+  const text = await response.text();
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return {
+      ok: false,
+      error:
+        "Empty response from the API. Run the backend (npm run server:dev on port 5000). On a phone, use the same Wi‑Fi and ensure the app reaches your computer’s IP, not only localhost.",
+    };
+  }
+  try {
+    return { ok: true, data: JSON.parse(trimmed) as T };
+  } catch {
+    return {
+      ok: false,
+      error: `Invalid response from server (HTTP ${response.status}). The API may be down or the wrong URL is configured.`,
+    };
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
@@ -68,8 +92,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const response = await fetch(new URL("/api/oauth-config", getApiUrl()).toString());
       if (response.ok) {
-        const config = await response.json();
-        setOauthConfig(config);
+        const parsed = await parseJsonResponse<OAuthConfig>(response);
+        if (parsed.ok) {
+          setOauthConfig(parsed.data);
+        }
       }
     } catch (error) {
       console.error("Failed to load OAuth config:", error);
@@ -99,8 +125,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       
       if (response.ok) {
-        const userData = await response.json();
-        setUser(userData);
+        const parsed = await parseJsonResponse<User>(response);
+        if (parsed.ok) {
+          setUser(parsed.data);
+        }
       } else {
         await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
         setToken(null);
@@ -173,9 +201,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ email, password }),
       });
 
-      const data = await response.json();
+      const parsed = await parseJsonResponse<{
+        token?: string;
+        user?: User;
+        error?: string;
+      }>(response);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error };
+      }
+      const data = parsed.data;
 
       if (response.ok) {
+        if (!data.token || !data.user) {
+          return {
+            success: false,
+            error: "Invalid login response from server (missing token or user).",
+          };
+        }
         await AsyncStorage.setItem(AUTH_TOKEN_KEY, data.token);
         setToken(data.token);
         setUser(data.user);
@@ -197,9 +239,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ email, password, referralCode: referralCode?.trim() || undefined }),
       });
 
-      const data = await response.json();
+      const parsed = await parseJsonResponse<{
+        token?: string;
+        user?: User;
+        error?: string;
+      }>(response);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error };
+      }
+      const data = parsed.data;
 
       if (response.ok) {
+        if (!data.token || !data.user) {
+          return {
+            success: false,
+            error: "Invalid registration response from server (missing token or user).",
+          };
+        }
         await AsyncStorage.setItem(AUTH_TOKEN_KEY, data.token);
         setToken(data.token);
         setUser(data.user);
@@ -240,9 +296,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }),
       });
 
-      const data = await response.json();
+      const parsed = await parseJsonResponse<{
+        token?: string;
+        user?: User;
+        error?: string;
+      }>(response);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error };
+      }
+      const data = parsed.data;
 
       if (response.ok) {
+        if (!data.token || !data.user) {
+          return {
+            success: false,
+            error: "Invalid Google sign-in response from server.",
+          };
+        }
         await AsyncStorage.setItem(AUTH_TOKEN_KEY, data.token);
         setToken(data.token);
         setUser(data.user);
@@ -306,7 +376,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ code }),
       });
 
-      const data = await response.json();
+      const parsed = await parseJsonResponse<{ error?: string }>(response);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error };
+      }
+      const data = parsed.data;
 
       if (response.ok) {
         if (user) {
@@ -339,7 +413,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         },
       });
 
-      const data = await response.json();
+      const parsed = await parseJsonResponse<{ error?: string }>(response);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error };
+      }
+      const data = parsed.data;
 
       if (response.ok) {
         return { success: true };

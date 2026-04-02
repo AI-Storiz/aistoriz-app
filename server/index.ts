@@ -16,6 +16,28 @@ declare module "http" {
   }
 }
 
+function isPrivateLanHostname(hostname: string): boolean {
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return true;
+  }
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(hostname);
+  if (!m) {
+    return false;
+  }
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  if (a === 10) {
+    return true;
+  }
+  if (a === 192 && b === 168) {
+    return true;
+  }
+  if (a === 172 && b >= 16 && b <= 31) {
+    return true;
+  }
+  return false;
+}
+
 function setupCors(app: express.Application) {
   app.use((req, res, next) => {
     const origin = req.header("origin");
@@ -44,7 +66,10 @@ function setupCors(app: express.Application) {
       originHostname === 'localhost' ||
       originHostname === '127.0.0.1';
 
-    if (isReplitDomain || isLocalhost) {
+    // Expo web from LAN URL (e.g. http://192.168.x.x:8081) needs CORS to the API
+    const isLanDevOrigin = isDev && isPrivateLanHostname(originHostname);
+
+    if (isReplitDomain || isLocalhost || isLanDevOrigin) {
       res.header("Access-Control-Allow-Origin", origin);
       res.header(
         "Access-Control-Allow-Methods",
@@ -321,8 +346,8 @@ function setupErrorHandler(app: express.Application) {
     host: "0.0.0.0",
   };
 
-  // Windows can throw ENOTSUP when reusePort is enabled.
-  if (process.platform !== "win32") {
+  // SO_REUSEPORT is only safe to enable on Linux. Windows and macOS return ENOTSUP.
+  if (process.platform === "linux") {
     listenOptions.reusePort = true;
   }
 
