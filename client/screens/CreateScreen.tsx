@@ -342,6 +342,8 @@ export default function CreateScreen() {
   const [showResultModal, setShowResultModal] = useState(false);
   const [resultMessage, setResultMessage] = useState("");
   const [resultSuccess, setResultSuccess] = useState(true);
+  const [creditBase, setCreditBase] = useState(20);
+  const [creditPerPage, setCreditPerPage] = useState(15);
 
   const btnStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
@@ -360,6 +362,19 @@ export default function CreateScreen() {
       }
     } catch (error) {
       console.error("Error loading art styles:", error);
+    }
+  };
+
+  const loadCreditPricing = async () => {
+    try {
+      const response = await fetch(new URL("/api/credits/settings", getApiUrl()).toString());
+      if (response.ok) {
+        const data = await response.json();
+        if (typeof data.baseCost === "number") setCreditBase(data.baseCost);
+        if (typeof data.costPerPage === "number") setCreditPerPage(data.costPerPage);
+      }
+    } catch (error) {
+      console.error("Error loading credit settings:", error);
     }
   };
 
@@ -447,6 +462,7 @@ export default function CreateScreen() {
     useCallback(() => {
       loadCharacters();
       loadArtStyles();
+      loadCreditPricing();
       checkAndClearSelection();
     }, [])
   );
@@ -550,7 +566,7 @@ export default function CreateScreen() {
   };
 
   const calculateCost = () => {
-    return 50 + (pagesCount - 2) * 15;
+    return creditBase + Math.max(0, pagesCount - 1) * creditPerPage;
   };
 
   const handleGenerate = () => {

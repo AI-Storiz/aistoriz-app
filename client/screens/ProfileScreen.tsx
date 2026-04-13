@@ -29,6 +29,7 @@ import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 
 import { useAuth } from "@/contexts/AuthContext";
 import type { RootStackParamList } from "@/navigation/RootStackNavigator";
+import { SUPPORT_EMAIL, INVITE_MESSAGE } from "@/constants/appLinks";
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -132,7 +133,7 @@ export default function ProfileScreen() {
     },
   });
 
-  const { data: referralStats } = useQuery<{
+  const { data: referralStats, isLoading: referralStatsLoading } = useQuery<{
     referralCode: string | null;
     totalReferrals: number;
     creditsEarned: number;
@@ -223,6 +224,9 @@ export default function ProfileScreen() {
     });
   };
 
+  const resolvedReferralCode =
+    referralStats?.referralCode ?? user?.referralCode ?? null;
+
   const getStorageKey = () => user ? `saved_comics_${user.id}` : "saved_comics";
 
   const handleClearHistory = () => {
@@ -272,7 +276,7 @@ export default function ProfileScreen() {
   };
 
   const copyReferralCode = () => {
-    const code = referralStats?.referralCode || user?.referralCode;
+    const code = resolvedReferralCode;
     if (code) {
       Clipboard.setString(code);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -281,14 +285,17 @@ export default function ProfileScreen() {
   };
 
   const shareReferralCode = async () => {
-    const code = referralStats?.referralCode || user?.referralCode;
+    const code = resolvedReferralCode;
     if (!code) return;
     
     const inviteeCredits = referralStats?.inviteeCredits || 25;
-    const message = `Join AI Storiz!\nUse my referral code: ${code}\n\nSign up and get ${inviteeCredits} free credits!`;
+    const message = INVITE_MESSAGE(code, inviteeCredits);
     
     try {
-      await Share.share({ message, title: "Join AI Storiz" });
+      await Share.share({
+        message,
+        title: "AI Storiz — create amazing comics",
+      });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
       console.error("Error sharing:", error);
@@ -299,17 +306,17 @@ export default function ProfileScreen() {
     const userId = user?.userId || "Not logged in";
     const subject = encodeURIComponent("AI Storiz Support Request");
     const body = encodeURIComponent(`User ID: ${userId}\n\nPlease describe your issue:\n\n`);
-    const mailtoUrl = `mailto:info@aidynamiz.com?subject=${subject}&body=${body}`;
+    const mailtoUrl = `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`;
     
     try {
       const canOpen = await Linking.canOpenURL(mailtoUrl);
       if (canOpen) {
         await Linking.openURL(mailtoUrl);
       } else {
-        Alert.alert("Email Not Available", `Please send an email to info@aidynamiz.com with your User ID: ${userId}`);
+        Alert.alert("Email Not Available", `Please send an email to ${SUPPORT_EMAIL} with your User ID: ${userId}`);
       }
     } catch (error) {
-      Alert.alert("Email Not Available", `Please send an email to info@aidynamiz.com`);
+      Alert.alert("Email Not Available", `Please send an email to ${SUPPORT_EMAIL}`);
     }
   };
 
@@ -400,9 +407,15 @@ export default function ProfileScreen() {
               </Text>
               
               <View style={styles.referralCodeBox}>
-                <Text style={styles.referralCode}>
-                  {referralStats?.referralCode || user?.referralCode || "---"}
-                </Text>
+                {referralStatsLoading && !resolvedReferralCode ? (
+                  <Text style={[styles.referralCode, { letterSpacing: 0, fontSize: 15, color: COLORS.dim }]}>
+                    Loading your code…
+                  </Text>
+                ) : (
+                  <Text style={styles.referralCode}>
+                    {resolvedReferralCode || "—"}
+                  </Text>
+                )}
               </View>
               
               <View style={styles.referralActions}>

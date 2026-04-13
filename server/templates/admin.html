@@ -511,7 +511,7 @@
           <div class="settings-grid" id="credit-settings-form">
             <div class="setting-card">
               <h4>Base Cost (Credits)</h4>
-              <input type="number" class="setting-input" id="credit-baseCost" value="50">
+              <input type="number" class="setting-input" id="credit-baseCost" value="20">
               <div class="setting-help">Cost for generating a comic</div>
             </div>
             <div class="setting-card">
@@ -531,12 +531,12 @@
             </div>
             <div class="setting-card">
               <h4>Weekly Plan Price ($)</h4>
-              <input type="number" step="0.01" class="setting-input" id="credit-weeklyPrice" value="6.99">
+              <input type="number" step="0.01" class="setting-input" id="credit-weeklyPrice" value="7.02">
               <div class="setting-help">Price for weekly subscription</div>
             </div>
             <div class="setting-card">
               <h4>Weekly Plan Credits</h4>
-              <input type="number" class="setting-input" id="credit-weeklyCredits" value="300">
+              <input type="number" class="setting-input" id="credit-weeklyCredits" value="270">
               <div class="setting-help">Credits in weekly plan</div>
             </div>
             <div class="setting-card">
@@ -1406,12 +1406,12 @@
         });
         if (res.ok) {
           creditSettings = await res.json();
-          document.getElementById('credit-baseCost').value = creditSettings.baseCost || 50;
+          document.getElementById('credit-baseCost').value = creditSettings.baseCost || 20;
           document.getElementById('credit-perPageCost').value = creditSettings.costPerPage || 15;
           document.getElementById('credit-adRewardCredits').value = creditSettings.adsCreditsReward || 25;
           document.getElementById('credit-maxAdsPerDay').value = creditSettings.maxAdsPerDay || 5;
-          document.getElementById('credit-weeklyPrice').value = creditSettings.weeklyPlanPrice || 6.99;
-          document.getElementById('credit-weeklyCredits').value = creditSettings.weeklyPlanCredits || 300;
+          document.getElementById('credit-weeklyPrice').value = creditSettings.weeklyPlanPrice || 7.02;
+          document.getElementById('credit-weeklyCredits').value = creditSettings.weeklyPlanCredits || 270;
           document.getElementById('credit-yearlyPrice').value = creditSettings.yearlyPlanPrice || 69;
           document.getElementById('credit-yearlyCredits').value = creditSettings.yearlyPlanCredits || 3000;
           document.getElementById('credit-topUp1Credits').value = creditSettings.topUp1Credits || 100;

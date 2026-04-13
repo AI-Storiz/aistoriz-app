@@ -3946,6 +3946,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           subscriptionStatus: user.subscriptionStatus,
           subscriptionPlan: user.subscriptionPlan,
           emailVerified: user.emailVerified,
+          referralCode: user.referralCode,
+          adsWatchedToday: user.adsWatchedToday,
         }
       });
     } catch (error: any) {
@@ -3984,6 +3986,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           credits: user.credits,
           subscriptionStatus: user.subscriptionStatus,
           subscriptionPlan: user.subscriptionPlan,
+          referralCode: user.referralCode,
+          adsWatchedToday: user.adsWatchedToday,
         }
       });
     } catch (error: any) {
@@ -4064,6 +4068,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           credits: user.credits,
           subscriptionStatus: user.subscriptionStatus,
           subscriptionPlan: user.subscriptionPlan,
+          referralCode: user.referralCode,
+          adsWatchedToday: user.adsWatchedToday,
         }
       });
     } catch (error: any) {
@@ -4392,7 +4398,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const settings = await storage.getCreditSettings();
       
       const baseCost = settings.baseCost;
-      const additionalPages = Math.max(0, pagesCount - 2);
+      const additionalPages = Math.max(0, pagesCount - 1);
       const additionalCost = additionalPages * settings.costPerPage;
       const totalCost = baseCost + additionalCost;
       
@@ -4421,7 +4427,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const settings = await storage.getCreditSettings();
       const baseCost = settings.baseCost;
-      const additionalPages = Math.max(0, pagesCount - 2);
+      const additionalPages = Math.max(0, pagesCount - 1);
       const additionalCost = additionalPages * settings.costPerPage;
       const totalCost = baseCost + additionalCost;
       

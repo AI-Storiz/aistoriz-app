@@ -65,7 +65,7 @@ export class DatabaseStorage implements IStorage {
         email,
         password: hashedPassword,
         userId,
-        credits: 50,
+        credits: 20,
         subscriptionStatus: "none",
         emailVerified: false,
         verificationCode: verificationCode || null,

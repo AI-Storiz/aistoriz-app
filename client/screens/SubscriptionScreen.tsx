@@ -89,8 +89,8 @@ export default function SubscriptionScreen() {
 
   const isSubscribed = user?.subscriptionStatus && user.subscriptionStatus !== "none";
 
-  const weeklyCredits = settings?.weeklyPlanCredits || 300;
-  const weeklyPrice = settings?.weeklyPlanPrice || "6.99";
+  const weeklyCredits = settings?.weeklyPlanCredits || 270;
+  const weeklyPrice = settings?.weeklyPlanPrice || "7.02";
   const yearlyCredits = settings?.yearlyPlanCredits || 3000;
   const yearlyPrice = settings?.yearlyPlanPrice || "69.00";
   const yearlySavings = Math.round((1 - (parseFloat(yearlyPrice) / (parseFloat(weeklyPrice) * 52))) * 100);
@@ -173,7 +173,9 @@ export default function SubscriptionScreen() {
           </View>
           <Text style={styles.planCredits}>{weeklyCredits} credits</Text>
           <Text style={styles.planPrice}>${weeklyPrice}/week</Text>
-          <Text style={styles.planPer}>~${(parseFloat(weeklyPrice) / weeklyCredits * 100).toFixed(1)}¢ per credit</Text>
+          <Text style={styles.planPer}>
+            ~${(parseFloat(weeklyPrice) / weeklyCredits).toFixed(3)} per credit
+          </Text>
         </Pressable>
 
         <Pressable
@@ -196,7 +198,9 @@ export default function SubscriptionScreen() {
           </View>
           <Text style={styles.planCredits}>{yearlyCredits} credits</Text>
           <Text style={styles.planPrice}>${yearlyPrice}/year</Text>
-          <Text style={styles.planPer}>~${(parseFloat(yearlyPrice) / yearlyCredits * 100).toFixed(1)}¢ per credit</Text>
+          <Text style={styles.planPer}>
+            ~${(parseFloat(yearlyPrice) / yearlyCredits).toFixed(3)} per credit
+          </Text>
           <View style={styles.savingsBadge}>
             <Text style={styles.savingsText}>Save {yearlySavings}%</Text>
           </View>

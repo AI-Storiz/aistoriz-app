@@ -56,8 +56,8 @@ export default function AboutScreen() {
         <ThemedText style={styles.paragraph}>
           Have questions, feedback, or need support? We'd love to hear from you!
         </ThemedText>
-        <ThemedText style={styles.contactInfo}>Email: info@aidynamiz.com</ThemedText>
-        <ThemedText style={styles.contactInfo}>Website: www.aidynamiz.com</ThemedText>
+        <ThemedText style={styles.contactInfo}>Email: info@fiocreatives.com</ThemedText>
+        <ThemedText style={styles.contactInfo}>Website: www.fiocreatives.com</ThemedText>
       </View>
 
       <ThemedText style={styles.copyright}>

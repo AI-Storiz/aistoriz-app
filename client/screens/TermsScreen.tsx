@@ -50,7 +50,7 @@ export default function TermsScreen() {
         <ThemedText style={styles.paragraph}>
           Comic generation requires credits. Credits can be obtained through:
         </ThemedText>
-        <ThemedText style={styles.bulletPoint}>Free credits upon registration (50 credits)</ThemedText>
+        <ThemedText style={styles.bulletPoint}>Free credits upon registration (20 credits)</ThemedText>
         <ThemedText style={styles.bulletPoint}>Watching rewarded video ads (25 credits per ad, max 5/day)</ThemedText>
         <ThemedText style={styles.bulletPoint}>Purchasing subscription plans</ThemedText>
         <ThemedText style={[styles.paragraph, { marginTop: Spacing.sm }]}>
@@ -93,7 +93,7 @@ export default function TermsScreen() {
       <View style={[styles.section, { backgroundColor: theme.backgroundDefault }]}>
         <ThemedText type="h3" style={styles.sectionTitle}>9. Contact</ThemedText>
         <ThemedText style={styles.paragraph}>
-          For questions about these Terms, contact us at info@aidynamiz.com
+          For questions about these Terms, contact us at info@fiocreatives.com
         </ThemedText>
       </View>
     </ScrollView>

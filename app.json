@@ -56,6 +56,20 @@
           "icon": "./assets/images/icon.png",
           "color": "#FFB347"
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "AI Storiz needs access to your photos so you can add character pictures for your comics.",
+          "cameraPermission": "AI Storiz needs camera access to take a character photo for your comics."
+        }
+      ],
+      [
+        "react-native-google-mobile-ads",
+        {
+          "androidAppId": "ca-app-pub-3940256099942544~3347511713",
+          "iosAppId": "ca-app-pub-3940256099942544~1458002511"
+        }
       ]
     ],
     "experiments": {

@@ -383,9 +383,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const data = parsed.data;
 
       if (response.ok) {
-        if (user) {
-          setUser({ ...user, emailVerified: true });
-        }
+        await fetchUser(currentToken);
         return { success: true };
       } else {
         return { success: false, error: data.error || "Verification failed" };
