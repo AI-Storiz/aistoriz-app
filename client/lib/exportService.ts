@@ -160,6 +160,33 @@ const getImageAsBase64 = async (imageUrl: string): Promise<string> => {
   return dataUrl.slice(comma + 1).replace(/\s/g, "");
 };
 
+/** Try URLs in order; only retries when download fails with HTTP 404 (e.g. empty first panel slot). */
+const getImageAsBase64WithFallbacks = async (candidates: string[]): Promise<string> => {
+  const seen = new Set<string>();
+  const list = candidates
+    .map((c) => c.trim())
+    .filter((c) => c.length > 0 && !seen.has(c) && (seen.add(c), true));
+
+  if (list.length === 0) {
+    throw new Error("No image URL to download");
+  }
+
+  let lastError: Error | null = null;
+  for (const url of list) {
+    try {
+      return await getImageAsBase64(url);
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e : new Error(String(e));
+      lastError = err;
+      if (err.message.includes("(404)") || err.message.includes(" 404")) {
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError ?? new Error("Image download failed");
+};
+
 const generateSpeechBubbleHtml = (dialogue: string): string => {
   if (!dialogue || dialogue.trim() === '') return '';
   
@@ -570,15 +597,16 @@ export const sharePDF = async (pages: ComicPage[], title: string): Promise<Expor
   return shareFile(pdfResult.filePath, "application/pdf");
 };
 
-export const shareSingleJPG = async (
-  imageUrl: string,
-  pageNumber: number
-): Promise<ExportResult> => {
+/**
+ * Share one comic page as JPG, trying several image URLs when the first returns 404
+ * (common when `panelImages[0]` points at an empty panel but `imageUrl` is the full-page `/panel/-1/` image).
+ */
+export const shareComicPageJPG = async (page: ComicPage): Promise<ExportResult> => {
   try {
     if (Platform.OS === "web") {
       if (navigator.share) {
         await navigator.share({
-          title: `Comic Page ${pageNumber}`,
+          title: `Comic Page ${page.pageNumber}`,
           text: "Check out this comic page!",
         });
         return { success: true, message: "Shared!" };
@@ -586,17 +614,39 @@ export const shareSingleJPG = async (
       return { success: false, message: "Sharing not supported in this browser." };
     }
 
-    const base64 = await getImageAsBase64(imageUrl);
-    const tempPath = uniqueCacheFile(`share_page_${pageNumber}`, "jpg");
+    const candidates: string[] = [];
+    const add = (u?: string) => {
+      const t = (u || "").trim();
+      if (t && !candidates.includes(t)) candidates.push(t);
+    };
+
+    for (const u of getFlatImageUrlsForExport(page)) add(u);
+    add(page.imageUrl);
+    if (page.panelImages) {
+      for (const u of page.panelImages) add(u);
+    }
+
+    const base64 = await getImageAsBase64WithFallbacks(candidates);
+    const tempPath = uniqueCacheFile(`share_page_${page.pageNumber}`, "jpg");
     await FileSystem.writeAsStringAsync(tempPath, base64, {
       encoding: FileSystem.EncodingType.Base64,
     });
 
     return shareFile(tempPath, "image/jpeg");
   } catch (error: any) {
-    console.error("Share single JPG error:", error);
+    console.error("Share comic page JPG error:", error);
     return { success: false, message: `Share failed: ${error.message}` };
   }
+};
+
+export const shareSingleJPG = async (
+  imageUrl: string,
+  pageNumber: number
+): Promise<ExportResult> => {
+  return shareComicPageJPG({
+    pageNumber,
+    imageUrl,
+  });
 };
 
 export const shareZIP = async (pages: ComicPage[], title: string): Promise<ExportResult> => {

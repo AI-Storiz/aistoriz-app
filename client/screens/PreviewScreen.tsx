@@ -31,7 +31,7 @@ import { ComicBackground } from "@/components/ComicBackground";
 import { ComicPageWithBubbles } from "@/components/ComicPageWithBubbles";
 import { ComicPanelGrid } from "@/components/ComicPanelGrid";
 import { EditDialogueModal } from "@/components/EditDialogueModal";
-import { shareSingleJPG, sharePDF, shareZIP, downloadToDevice, ComicPage } from "@/lib/exportService";
+import { shareComicPageJPG, sharePDF, shareZIP, downloadToDevice, ComicPage } from "@/lib/exportService";
 import type { RootStackParamList } from "@/navigation/RootStackNavigator";
 
 type RouteType = RouteProp<RootStackParamList, "Preview">;
@@ -309,15 +309,15 @@ export default function PreviewScreen() {
   const handleSharePage = useCallback(async (page: ComicPage) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
-    const imageToShare =
-      page.panelImages && page.panelImages.length > 0 ? page.panelImages[0] : page.imageUrl;
-
-    if (!imageToShare) {
+    const hasAny =
+      (page.imageUrl || "").trim().length > 0 ||
+      (page.panelImages && page.panelImages.some((u) => (u || "").trim().length > 0));
+    if (!hasAny) {
       Alert.alert("Share Error", "No image available to share.");
       return;
     }
 
-    const result = await shareSingleJPG(imageToShare, page.pageNumber);
+    const result = await shareComicPageJPG(page);
     if (!result.success) {
       Alert.alert("Share Error", result.message);
     }
