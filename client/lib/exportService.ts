@@ -49,25 +49,76 @@ const ensureDirectoryExists = async (dirPath: string): Promise<void> => {
   }
 };
 
-const getImageAsBase64 = async (imageUrl: string): Promise<string> => {
-  if (imageUrl.startsWith("data:image")) {
-    return imageUrl.split(",")[1];
+const uniqueCacheFile = (prefix: string, ext: string) =>
+  `${FileSystem.cacheDirectory}${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 11)}.${ext}`;
+
+/** expo-print sometimes returns a relative path; moveAsync needs a real file:// URI. */
+const normalizeLocalFileUri = (uri: string): string => {
+  const u = uri.trim();
+  if (u.startsWith("file://")) return u;
+  if (u.startsWith("/")) return `file://${u}`;
+  const base = FileSystem.cacheDirectory || FileSystem.documentDirectory || "";
+  if (!base) return u;
+  return `${base}${u.replace(/^\.\//, "")}`;
+};
+
+/**
+ * Resolve any supported image reference to a full data:image/...;base64,... URL
+ * (correct MIME for http(s) so PDF/WebView rendering is reliable).
+ */
+const getImageAsDataUrl = async (imageUrl: string): Promise<string> => {
+  const trimmed = imageUrl.trim();
+  if (!trimmed) {
+    throw new Error("Empty image URL");
   }
 
-  if (imageUrl.startsWith("file://") || imageUrl.startsWith(FileSystem.documentDirectory || "")) {
-    const content = await FileSystem.readAsStringAsync(imageUrl, {
+  if (trimmed.startsWith("data:image")) {
+    return trimmed;
+  }
+
+  if (
+    trimmed.startsWith("file://") ||
+    (FileSystem.documentDirectory && trimmed.startsWith(FileSystem.documentDirectory)) ||
+    (FileSystem.cacheDirectory && trimmed.startsWith(FileSystem.cacheDirectory))
+  ) {
+    const content = await FileSystem.readAsStringAsync(trimmed, {
       encoding: FileSystem.EncodingType.Base64,
     });
-    return content;
+    if (!content) throw new Error("Could not read local image file");
+    return `data:image/jpeg;base64,${content}`;
   }
 
-  const tempPath = `${FileSystem.cacheDirectory}temp_export_${Date.now()}.png`;
-  await FileSystem.downloadAsync(imageUrl, tempPath);
-  const content = await FileSystem.readAsStringAsync(tempPath, {
-    encoding: FileSystem.EncodingType.Base64,
+  const response = await fetch(trimmed, { headers: { Accept: "image/*,*/*" } });
+  if (!response.ok) {
+    throw new Error(`Image download failed (${response.status})`);
+  }
+
+  const blob = await response.blob();
+  const dataUrl: string = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const r = reader.result;
+      if (typeof r === "string") resolve(r);
+      else reject(new Error("FileReader did not return a string"));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("FileReader failed"));
+    reader.readAsDataURL(blob);
   });
-  await FileSystem.deleteAsync(tempPath, { idempotent: true });
-  return content;
+
+  if (!dataUrl.startsWith("data:image") || !dataUrl.includes("base64,")) {
+    throw new Error("Downloaded file was not a recognizable image");
+  }
+  return dataUrl;
+};
+
+/**
+ * Raw base64 payload (no data: prefix) for ZIP / file writes.
+ */
+const getImageAsBase64 = async (imageUrl: string): Promise<string> => {
+  const dataUrl = await getImageAsDataUrl(imageUrl);
+  const comma = dataUrl.indexOf(",");
+  if (comma === -1) throw new Error("Invalid data image URI");
+  return dataUrl.slice(comma + 1).replace(/\s/g, "");
 };
 
 const generateSpeechBubbleHtml = (dialogue: string): string => {
@@ -104,48 +155,48 @@ const generatePanelGridHtml = async (
   panels?: PanelData[]
 ): Promise<string> => {
   const panelCount = panelImages.length;
-  const base64Promises = panelImages.map(img => getImageAsBase64(img));
-  const base64Images = await Promise.all(base64Promises);
-  
-  let gridStyle = '';
-  let panelHtml = '';
-  
-  const createPanelWithBubble = (b64: string, index: number, gridSpan?: string): string => {
-    const dialogue = panels?.[index]?.dialogue || '';
+  const dataUrlPromises = panelImages.map((img) => getImageAsDataUrl(img));
+  const dataUrls = await Promise.all(dataUrlPromises);
+
+  let gridStyle = "";
+  let panelHtml = "";
+
+  const createPanelWithBubble = (dataUrl: string, index: number, gridSpan?: string): string => {
+    const dialogue = panels?.[index]?.dialogue || "";
     const bubbleHtml = generateSpeechBubbleHtml(dialogue);
-    const spanStyle = gridSpan ? `grid-column: ${gridSpan};` : '';
-    
+    const spanStyle = gridSpan ? `grid-column: ${gridSpan};` : "";
+
     return `
       <div style="position: relative; overflow: hidden; border-radius: 8px; background: #f0f0f0; ${spanStyle}">
-        <img src="data:image/png;base64,${b64}" style="width: 100%; height: 100%; object-fit: cover;" />
+        <img src="${dataUrl}" style="width: 100%; height: 100%; object-fit: cover;" />
         ${bubbleHtml}
       </div>
     `;
   };
-  
+
   if (panelCount === 1) {
-    gridStyle = 'display: flex; justify-content: center; align-items: center; height: 100%;';
-    const dialogue = panels?.[0]?.dialogue || '';
+    gridStyle = "display: flex; justify-content: center; align-items: center; height: 100%;";
+    const dialogue = panels?.[0]?.dialogue || "";
     const bubbleHtml = generateSpeechBubbleHtml(dialogue);
     panelHtml = `
       <div style="position: relative; max-width: 100%; max-height: 100%;">
-        <img src="data:image/png;base64,${base64Images[0]}" style="max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px;" />
+        <img src="${dataUrls[0]}" style="max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px;" />
         ${bubbleHtml}
       </div>
     `;
   } else if (panelCount === 2) {
-    gridStyle = 'display: grid; grid-template-columns: 1fr 1fr; gap: 8px; height: 100%;';
-    panelHtml = base64Images.map((b64, idx) => createPanelWithBubble(b64, idx)).join('');
+    gridStyle = "display: grid; grid-template-columns: 1fr 1fr; gap: 8px; height: 100%;";
+    panelHtml = dataUrls.map((du, idx) => createPanelWithBubble(du, idx)).join("");
   } else if (panelCount === 3) {
-    gridStyle = 'display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 8px; height: 100%;';
+    gridStyle = "display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 8px; height: 100%;";
     panelHtml = `
-      ${createPanelWithBubble(base64Images[0], 0, '1 / 3')}
-      ${createPanelWithBubble(base64Images[1], 1)}
-      ${createPanelWithBubble(base64Images[2], 2)}
+      ${createPanelWithBubble(dataUrls[0], 0, "1 / 3")}
+      ${createPanelWithBubble(dataUrls[1], 1)}
+      ${createPanelWithBubble(dataUrls[2], 2)}
     `;
   } else {
-    gridStyle = 'display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 8px; height: 100%;';
-    panelHtml = base64Images.slice(0, 4).map((b64, idx) => createPanelWithBubble(b64, idx)).join('');
+    gridStyle = "display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 8px; height: 100%;";
+    panelHtml = dataUrls.slice(0, 4).map((du, idx) => createPanelWithBubble(du, idx)).join("");
   }
   
   const titleHtml = pageType === 'cover' && pageTitle 
@@ -178,12 +229,12 @@ export const exportToPDF = async (
       if (page.panelImages && page.panelImages.length > 0) {
         contentHtml = await generatePanelGridHtml(page.panelImages, page.pageType, title, page.panels);
       } else if (page.imageUrl) {
-        const base64 = await getImageAsBase64(page.imageUrl);
-        const dialogue = page.scenes?.dialogue || '';
-        const bubbleHtml = dialogue ? generateSpeechBubbleHtml(dialogue) : '';
+        const dataUrl = await getImageAsDataUrl(page.imageUrl);
+        const dialogue = page.scenes?.dialogue || "";
+        const bubbleHtml = dialogue ? generateSpeechBubbleHtml(dialogue) : "";
         contentHtml = `
           <div style="position: relative; max-width: 100%; max-height: 100%;">
-            <img src="data:image/png;base64,${base64}" style="max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px;" />
+            <img src="${dataUrl}" style="max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px;" />
             ${bubbleHtml}
           </div>
         `;
@@ -228,8 +279,9 @@ export const exportToPDF = async (
     await ensureDirectoryExists(exportPath);
     const destinationUri = `${exportPath}${fileName}`;
 
+    const pdfSourceUri = normalizeLocalFileUri(uri);
     await FileSystem.moveAsync({
-      from: uri,
+      from: pdfSourceUri,
       to: destinationUri,
     });
 
@@ -492,7 +544,7 @@ export const shareSingleJPG = async (
     }
 
     const base64 = await getImageAsBase64(imageUrl);
-    const tempPath = `${FileSystem.cacheDirectory}share_page_${pageNumber}.jpg`;
+    const tempPath = uniqueCacheFile(`share_page_${pageNumber}`, "jpg");
     await FileSystem.writeAsStringAsync(tempPath, base64, {
       encoding: FileSystem.EncodingType.Base64,
     });
