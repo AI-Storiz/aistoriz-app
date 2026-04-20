@@ -428,7 +428,10 @@ export class DatabaseStorage implements IStorage {
             'panelCount', COALESCE(jsonb_array_length(page->'panelImages'), 0),
             'panels', page->'panels',
             'scenes', page->'scenes',
-            'hasImageUrl', (page->>'imageUrl' IS NOT NULL OR page->>'imageUri' IS NOT NULL),
+            'hasImageUrl', (
+              length(btrim(coalesce(page->>'imageUrl', ''))) > 0
+              OR length(btrim(coalesce(page->>'imageUri', ''))) > 0
+            ),
             'generationMode', page->>'generationMode'
           ))
           FROM jsonb_array_elements(${userComics.pages}) AS page
@@ -472,11 +475,13 @@ export class DatabaseStorage implements IStorage {
       .from(userComics)
       .where(and(eq(userComics.id, comicId), eq(userComics.userId, userId)));
     
-    if (!result?.imageData) {
+    const raw = result?.imageData;
+    const trimmed = raw != null ? String(raw).trim() : "";
+    if (!trimmed) {
       console.log(`Image not found: comic=${comicId}, page=${safePageIdx}, panel=${safePanelIdx}`);
+      return null;
     }
-    
-    return result?.imageData || null;
+    return trimmed;
   }
 
   async createUserComic(userId: string, data: { title: string; style: string; characterNames: string[]; pages: any[] }): Promise<UserComic> {

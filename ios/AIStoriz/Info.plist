@@ -28,7 +28,7 @@
         <key>CFBundleURLSchemes</key>
         <array>
           <string>aistoriz</string>
-          <string>com.aidynamiz.storiz</string>
+          <string>com.aistoriz.storiz</string>
         </array>
       </dict>
     </array>

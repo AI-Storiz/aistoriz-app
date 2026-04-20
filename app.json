@@ -10,7 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.aidynamiz.storiz",
+      "bundleIdentifier": "com.aistoriz.storiz",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -22,7 +22,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.aidynamiz.storiz",
+      "package": "com.aistoriz.storiz",
       "versionCode": 1,
       "permissions": [
         "INTERNET",

@@ -2,7 +2,7 @@
 export const SUPPORT_EMAIL = "info@fiocreatives.com";
 
 export const PLAY_STORE_URL =
-  "https://play.google.com/store/apps/details?id=com.aidynamiz.storiz";
+  "https://play.google.com/store/apps/details?id=com.aistoriz.storiz";
 
 /** Update with real App Store listing URL when the app is published. */
 export const APP_STORE_URL = "https://apps.apple.com/app/ai-storiz/id0000000000";
