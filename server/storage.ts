@@ -431,6 +431,12 @@ export class DatabaseStorage implements IStorage {
             'hasImageUrl', (
               length(btrim(coalesce(page->>'imageUrl', ''))) > 0
               OR length(btrim(coalesce(page->>'imageUri', ''))) > 0
+              OR EXISTS (
+                SELECT 1 FROM jsonb_array_elements_text(
+                  COALESCE(page->'panelImages', '[]'::jsonb)
+                ) AS t(val)
+                WHERE length(btrim(val)) > 0
+              )
             ),
             'generationMode', page->>'generationMode'
           ))
@@ -458,10 +464,19 @@ export class DatabaseStorage implements IStorage {
     
     let sqlQuery;
     if (safePanelIdx === -1) {
+      // Full-page slot: main imageUrl, then first non-empty panel (covers DB rows where imageUrl was never set)
       sqlQuery = sql<string>`
         COALESCE(
-          ${userComics.pages}->${sql.raw(String(safePageIdx))}->>'imageUrl',
-          ${userComics.pages}->${sql.raw(String(safePageIdx))}->>'imageUri'
+          NULLIF(btrim(${userComics.pages}->${sql.raw(String(safePageIdx))}->>'imageUrl'), ''),
+          NULLIF(btrim(${userComics.pages}->${sql.raw(String(safePageIdx))}->>'imageUri'), ''),
+          (
+            SELECT x.value
+            FROM jsonb_array_elements_text(
+              COALESCE(${userComics.pages}->${sql.raw(String(safePageIdx))}->'panelImages', '[]'::jsonb)
+            ) AS x
+            WHERE length(btrim(x.value)) > 0
+            LIMIT 1
+          )
         )
       `;
     } else {

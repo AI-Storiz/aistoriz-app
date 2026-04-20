@@ -151,9 +151,13 @@ export default function HistoryScreen() {
           const panelImages = Array.from({ length: page.panelCount || 0 }, (_, panelIdx) =>
             panelImageHref(pageIdx, panelIdx)
           );
+          // Prefer -1 when metadata says full-page; else first panel; else -1 so server can
+          // fall back from imageUrl → first panelImages entry (covers partial DB rows).
           const imageUrl = page.hasImageUrl
             ? panelImageHref(pageIdx, -1)
-            : (panelImages.length > 0 ? panelImages[0] : "");
+            : panelImages.length > 0
+              ? panelImages[0]
+              : panelImageHref(pageIdx, -1);
           return {
             pageNumber: page.pageNumber,
             imageUrl,

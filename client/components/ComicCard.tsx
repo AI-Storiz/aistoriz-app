@@ -11,6 +11,8 @@ import * as Haptics from "expo-haptics";
 
 import { ThemedText } from "@/components/ThemedText";
 import { useTheme } from "@/hooks/useTheme";
+import { useAuth } from "@/contexts/AuthContext";
+import { authedComicImageSource } from "@/lib/comicImageSource";
 import { Spacing, BorderRadius, Shadows } from "@/constants/theme";
 
 interface ComicCardProps {
@@ -34,7 +36,11 @@ const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 export function ComicCard({ title, imageUrl, date, onPress, style, testID }: ComicCardProps) {
   const { theme } = useTheme();
+  const { token } = useAuth();
   const scale = useSharedValue(1);
+  const thumbSource = imageUrl?.trim()
+    ? authedComicImageSource(imageUrl, token)
+    : null;
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
@@ -71,8 +77,15 @@ export function ComicCard({ title, imageUrl, date, onPress, style, testID }: Com
       ]}
     >
       <View style={[styles.imageContainer, { backgroundColor: theme.backgroundSecondary }]}>
-        {imageUrl ? (
-          <Image source={imageUrl} style={styles.image} contentFit="cover" cachePolicy="disk" transition={200} />
+        {thumbSource ? (
+          <Image
+            source={thumbSource}
+            recyclingKey={imageUrl ?? ""}
+            style={styles.image}
+            contentFit="cover"
+            cachePolicy="disk"
+            transition={0}
+          />
         ) : (
           <Image
             source={require("../../assets/images/style-comic.png")}

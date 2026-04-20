@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import * as Haptics from "expo-haptics";
-import { useKeepAwake } from "expo-keep-awake";
+import { useKeepAwake, deactivateKeepAwake } from "expo-keep-awake";
 import { readAsStringAsync, EncodingType } from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import ReAnimated, {
@@ -250,6 +250,7 @@ const LOADING_MESSAGES = [
   "Packaging your comic...",
 ];
 
+const GENERATION_KEEP_AWAKE_TAG = "comic-generation-active";
 const POLL_INTERVAL = 5000; // Poll every 5 seconds
 const FETCH_TIMEOUT = 90000; // 90 second timeout per poll (backend responds fast now with lightweight payloads)
 const MAX_RETRIES = 360; // Retry up to 360 times (30 minutes of polling tolerance for long generations)
@@ -261,8 +262,13 @@ export default function GeneratingScreen() {
   const { theme } = useTheme();
   const { token } = useAuth();
   
-  // Keep screen awake during generation to prevent connection interruptions
-  useKeepAwake();
+  // Keep screen awake during generation; use explicit tag so we always release on unmount.
+  useKeepAwake(GENERATION_KEEP_AWAKE_TAG);
+  useEffect(() => {
+    return () => {
+      deactivateKeepAwake(GENERATION_KEEP_AWAKE_TAG).catch(() => {});
+    };
+  }, []);
 
   const [progress, setProgress] = useState(0);
   const [messageIndex, setMessageIndex] = useState(0);

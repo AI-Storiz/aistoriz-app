@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   View,
   ScrollView,
@@ -121,13 +121,17 @@ export default function PreviewScreen() {
     }
   };
 
-  const typedPages: ComicPage[] = pages.map((p) => ({
-    pageNumber: p.pageNumber,
-    imageUrl: p.imageUrl,
-    panelImages: p.panelImages,
-    pageType: p.pageType,
-    scenes: p.scenes,
-  }));
+  const typedPages: ComicPage[] = useMemo(
+    () =>
+      pages.map((p) => ({
+        pageNumber: p.pageNumber,
+        imageUrl: p.imageUrl,
+        panelImages: p.panelImages,
+        pageType: p.pageType,
+        scenes: p.scenes,
+      })),
+    [pages]
+  );
 
   const handleGoBack = async () => {
     await AsyncStorage.setItem("clearCharacterSelection", "true");
@@ -351,6 +355,7 @@ export default function PreviewScreen() {
           { paddingBottom: insets.bottom + (isReadOnly ? Spacing.xl : 120) },
         ]}
         showsVerticalScrollIndicator={false}
+        removeClippedSubviews={Platform.OS === "android"}
       >
         {isReadOnly && title ? (
           <View style={[styles.titleCard, { backgroundColor: theme.backgroundSecondary }]}>

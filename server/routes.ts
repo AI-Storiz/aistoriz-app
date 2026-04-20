@@ -4976,15 +4976,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const decoded = decodeComicDataUriToBuffer(imageData);
       if (decoded) {
         const { buffer, contentType } = decoded;
-        const etag = crypto.createHash("md5").update(buffer.subarray(0, Math.min(1024, buffer.length))).digest("hex");
-
-        if (req.headers["if-none-match"] === etag) {
-          return res.status(304).end();
-        }
-
+        // Always send a full body (no 304). RN image clients can show a blank frame when the same
+        // comic image URL is requested again (e.g. History thumbnail then cover on page 1).
         res.set("Content-Type", contentType);
-        res.set("Cache-Control", "public, max-age=604800, immutable");
-        res.set("ETag", etag);
+        res.set("Cache-Control", "private, max-age=86400");
         return res.send(buffer);
       }
 

@@ -52,6 +52,45 @@ const ensureDirectoryExists = async (dirPath: string): Promise<void> => {
 const uniqueCacheFile = (prefix: string, ext: string) =>
   `${FileSystem.cacheDirectory}${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 11)}.${ext}`;
 
+/** Comic image URLs often carry `?token=`; RN fetch is more reliable with Bearer as well. */
+function buildImageFetchHeaders(url: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+  };
+  try {
+    const u = new URL(url);
+    const tok = u.searchParams.get("token");
+    if (tok) {
+      headers.Authorization = `Bearer ${tok}`;
+    }
+  } catch {
+    /* non-absolute URL — leave without Authorization */
+  }
+  return headers;
+}
+
+/** Non-empty panel image URLs with dialogue rows kept in sync (skips blank slots that 404). */
+function getPanelImagesForExport(page: ComicPage): { urls: string[]; panels?: PanelData[] } {
+  const raw = page.panelImages;
+  if (!raw?.length) return { urls: [] };
+  const entries = raw
+    .map((img, i) => ({ url: (img || "").trim(), panel: page.panels?.[i] }))
+    .filter((e) => e.url.length > 0);
+  if (!entries.length) return { urls: [] };
+  return {
+    urls: entries.map((e) => e.url),
+    panels: entries.map((e) => e.panel ?? {}),
+  };
+}
+
+/** Ordered image URLs for this page (panels if any non-empty, else main imageUrl). */
+function getFlatImageUrlsForExport(page: ComicPage): string[] {
+  const { urls } = getPanelImagesForExport(page);
+  if (urls.length > 0) return urls;
+  const main = (page.imageUrl || "").trim();
+  return main ? [main] : [];
+}
+
 /** expo-print sometimes returns a relative path; moveAsync needs a real file:// URI. */
 const normalizeLocalFileUri = (uri: string): string => {
   const u = uri.trim();
@@ -88,7 +127,7 @@ const getImageAsDataUrl = async (imageUrl: string): Promise<string> => {
     return `data:image/jpeg;base64,${content}`;
   }
 
-  const response = await fetch(trimmed, { headers: { Accept: "image/*,*/*" } });
+  const response = await fetch(trimmed, { headers: buildImageFetchHeaders(trimmed) });
   if (!response.ok) {
     throw new Error(`Image download failed (${response.status})`);
   }
@@ -226,10 +265,11 @@ export const exportToPDF = async (
       
       let contentHtml = '';
       
-      if (page.panelImages && page.panelImages.length > 0) {
-        contentHtml = await generatePanelGridHtml(page.panelImages, page.pageType, title, page.panels);
-      } else if (page.imageUrl) {
-        const dataUrl = await getImageAsDataUrl(page.imageUrl);
+      const { urls: panelUrls, panels: panelRows } = getPanelImagesForExport(page);
+      if (panelUrls.length > 0) {
+        contentHtml = await generatePanelGridHtml(panelUrls, page.pageType, title, panelRows);
+      } else if (page.imageUrl?.trim()) {
+        const dataUrl = await getImageAsDataUrl(page.imageUrl.trim());
         const dialogue = page.scenes?.dialogue || "";
         const bubbleHtml = dialogue ? generateSpeechBubbleHtml(dialogue) : "";
         contentHtml = `
@@ -304,7 +344,7 @@ export const exportToJPG = async (
   try {
     if (Platform.OS === "web") {
       for (const page of pages) {
-        const images = page.panelImages && page.panelImages.length > 0 ? page.panelImages : (page.imageUrl ? [page.imageUrl] : []);
+        const images = getFlatImageUrlsForExport(page);
         for (let i = 0; i < images.length; i++) {
           const link = document.createElement("a");
           link.href = images[i];
@@ -325,7 +365,7 @@ export const exportToJPG = async (
 
     const savedFiles: string[] = [];
     for (const page of pages) {
-      const images = page.panelImages && page.panelImages.length > 0 ? page.panelImages : (page.imageUrl ? [page.imageUrl] : []);
+      const images = getFlatImageUrlsForExport(page);
       for (let i = 0; i < images.length; i++) {
         const fileName = images.length > 1
           ? `${title.replace(/[^a-zA-Z0-9]/g, "_")}_page_${page.pageNumber}_panel_${i + 1}.jpg`
@@ -355,7 +395,10 @@ const getWebBase64 = async (imageUrl: string): Promise<string> => {
   if (imageUrl.startsWith("data:image")) {
     return imageUrl.split(",")[1];
   }
-  const response = await fetch(imageUrl);
+  const response = await fetch(imageUrl, { headers: buildImageFetchHeaders(imageUrl) });
+  if (!response.ok) {
+    throw new Error(`Image download failed (${response.status})`);
+  }
   const blob = await response.blob();
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -375,7 +418,7 @@ export const exportToZIP = async (
     if (Platform.OS === "web") {
       const zip = new JSZip();
       for (const page of pages) {
-        const images = page.panelImages && page.panelImages.length > 0 ? page.panelImages : (page.imageUrl ? [page.imageUrl] : []);
+        const images = getFlatImageUrlsForExport(page);
         for (let i = 0; i < images.length; i++) {
           const base64Data = await getWebBase64(images[i]);
           const fileName = images.length > 1 
@@ -400,7 +443,7 @@ export const exportToZIP = async (
 
     const zip = new JSZip();
     for (const page of pages) {
-      const images = page.panelImages && page.panelImages.length > 0 ? page.panelImages : (page.imageUrl ? [page.imageUrl] : []);
+      const images = getFlatImageUrlsForExport(page);
       for (let i = 0; i < images.length; i++) {
         const base64 = await getImageAsBase64(images[i]);
         const fileName = images.length > 1 
@@ -454,7 +497,7 @@ export const downloadToDevice = async (
     await ensureDirectoryExists(exportPath);
 
     for (const page of pages) {
-      const images = page.panelImages && page.panelImages.length > 0 ? page.panelImages : (page.imageUrl ? [page.imageUrl] : []);
+      const images = getFlatImageUrlsForExport(page);
       for (let i = 0; i < images.length; i++) {
         const fileName = images.length > 1
           ? `${title.replace(/[^a-zA-Z0-9]/g, "_")}_page_${page.pageNumber}_panel_${i + 1}.jpg`
