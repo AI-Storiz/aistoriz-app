@@ -1,4 +1,13 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from "react";
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  ReactNode,
+  useCallback,
+  useMemo,
+  useRef,
+} from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { getApiUrl, apiRequest } from "@/lib/query-client";
 
@@ -27,7 +36,7 @@ export function AdsProvider({ children }: { children: ReactNode }) {
   const [textAd, setTextAd] = useState<Ad | null>(null);
   const [bannerAd, setBannerAd] = useState<Ad | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [recordedImpressions, setRecordedImpressions] = useState<Set<number>>(new Set());
+  const recordedImpressionsRef = useRef<Set<number>>(new Set());
   const [hasFetched, setHasFetched] = useState(false);
 
   const fetchAds = useCallback(async () => {
@@ -72,9 +81,8 @@ export function AdsProvider({ children }: { children: ReactNode }) {
   }, [fetchAds, hasFetched, token, authLoading]);
 
   const recordImpression = useCallback((adId: number) => {
-    if (recordedImpressions.has(adId) || !token) return;
-    
-    setRecordedImpressions(prev => new Set(prev).add(adId));
+    if (recordedImpressionsRef.current.has(adId) || !token) return;
+    recordedImpressionsRef.current.add(adId);
     fetch(new URL("/api/ads/impression", getApiUrl()).toString(), {
       method: "POST",
       headers: {
@@ -83,15 +91,20 @@ export function AdsProvider({ children }: { children: ReactNode }) {
       },
       body: JSON.stringify({ adId }),
     }).catch(console.error);
-  }, [recordedImpressions, token]);
+  }, [token]);
 
   const refreshAds = useCallback(() => {
-    setRecordedImpressions(new Set());
+    recordedImpressionsRef.current = new Set();
     fetchAds();
   }, [fetchAds]);
 
+  const adsValue = useMemo(
+    () => ({ textAd, bannerAd, isLoading, recordImpression, refreshAds }),
+    [textAd, bannerAd, isLoading, recordImpression, refreshAds]
+  );
+
   return (
-    <AdsContext.Provider value={{ textAd, bannerAd, isLoading, recordImpression, refreshAds }}>
+    <AdsContext.Provider value={adsValue}>
       {children}
     </AdsContext.Provider>
   );

@@ -27,6 +27,7 @@ import { ThemedText } from "@/components/ThemedText";
 import { Button } from "@/components/Button";
 import { ComicBackground } from "@/components/ComicBackground";
 import { getApiUrl, triggerHistoryRefresh } from "@/lib/query-client";
+import { fetchComicPagesForPreview } from "@/lib/comicPreviewUrls";
 import { compressComicPages } from "@/lib/imageCompression";
 import type { RootStackParamList } from "@/navigation/RootStackNavigator";
 
@@ -499,10 +500,13 @@ export default function GeneratingScreen() {
         await AsyncStorage.removeItem("current_job_id");
 
         const comicTitle = job.title || route.params.title || "My Comic";
-        
+
         // Check if server already auto-saved this comic
         const serverSaved = job.savedToLibrary === true;
         console.log(`Comic completion - server saved: ${serverSaved}`);
+
+        let comicIdForPreviewUrls: number | undefined =
+          typeof job.libraryComicId === "number" ? job.libraryComicId : undefined;
 
         // Only client-side save if server didn't already save (fallback)
         if (token && !serverSaved) {
@@ -536,11 +540,28 @@ export default function GeneratingScreen() {
 
             if (saveResponse.ok) {
               console.log("Comic auto-saved to history via client");
+              try {
+                const body = await saveResponse.json();
+                if (typeof body.comic?.id === "number") {
+                  comicIdForPreviewUrls = body.comic.id;
+                }
+              } catch {
+                /* ignore malformed JSON */
+              }
             } else {
               console.error("Failed to auto-save comic:", await saveResponse.text());
             }
           } catch (saveError) {
             console.error("Auto-save error:", saveError);
+          }
+        }
+
+        let pagesForPreview = job.pages;
+        if (token && comicIdForPreviewUrls != null) {
+          const urlPages = await fetchComicPagesForPreview(String(comicIdForPreviewUrls), token);
+          if (urlPages && urlPages.length > 0) {
+            pagesForPreview = urlPages;
+            console.log("Preview will use API image URLs (reduced memory vs inline images)");
           }
         }
 
@@ -551,7 +572,7 @@ export default function GeneratingScreen() {
 
         // Navigate to preview - comic is already saved (either by server or client)
         navigation.replace("Preview", {
-          pages: job.pages,
+          pages: pagesForPreview,
           isReadOnly: false,
           alreadySaved: true,
           title: comicTitle,

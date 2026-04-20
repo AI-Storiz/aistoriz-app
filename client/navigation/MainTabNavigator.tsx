@@ -28,6 +28,7 @@ export default function MainTabNavigator() {
     <Tab.Navigator
       initialRouteName="CreateTab"
       screenOptions={{
+        lazy: true,
         tabBarActiveTintColor: theme.primary,
         tabBarInactiveTintColor: theme.tabIconDefault,
         tabBarStyle: {

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   Image,
   Dimensions,
   Pressable,
+  Platform,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
@@ -17,6 +18,7 @@ import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { getApiUrl, onHistoryRefresh } from "@/lib/query-client";
+import { fetchComicPagesForPreview } from "@/lib/comicPreviewUrls";
 import { ComicCard } from "@/components/ComicCard";
 import { Button } from "@/components/Button";
 import FooterTextAd from "@/components/FooterTextAd";
@@ -56,28 +58,13 @@ export default function HistoryScreen() {
   const [loading, setLoading] = useState(true);
   const [loadingComicId, setLoadingComicId] = useState<string | null>(null);
 
-  useFocusEffect(
-    useCallback(() => {
-      loadComics();
-    }, [user?.id, token])
-  );
-
-  // Listen for refresh events when comics are saved
-  useEffect(() => {
-    const unsubscribe = onHistoryRefresh(() => {
-      console.log("History refresh triggered");
-      loadComics();
-    });
-    return unsubscribe;
-  }, [token]);
-
-  const loadComics = async () => {
+  const loadComics = useCallback(async () => {
     if (!token) {
       setComics([]);
       setLoading(false);
       return;
     }
-    
+
     setLoading(true);
     try {
       const response = await fetch(new URL("/api/comics", getApiUrl()).toString(), {
@@ -85,7 +72,7 @@ export default function HistoryScreen() {
           Authorization: `Bearer ${token}`,
         },
       });
-      
+
       if (response.ok) {
         const { comics: apiComics } = await response.json();
         const apiBase = getApiUrl();
@@ -112,7 +99,22 @@ export default function HistoryScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [token]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadComics();
+    }, [loadComics])
+  );
+
+  // Listen for refresh events when comics are saved
+  useEffect(() => {
+    const unsubscribe = onHistoryRefresh(() => {
+      console.log("History refresh triggered");
+      loadComics();
+    });
+    return unsubscribe;
+  }, [loadComics]);
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -123,114 +125,89 @@ export default function HistoryScreen() {
     });
   };
 
-  const handleComicPress = async (comic: SavedComicLightweight) => {
-    if (!token || loadingComicId) return;
-    
-    setLoadingComicId(comic.id);
-    try {
-      const response = await fetch(
-        new URL(`/api/comics/${comic.id}`, getApiUrl()).toString(),
-        {
-          headers: { Authorization: `Bearer ${token}` },
+  const handleComicPress = useCallback(
+    async (comic: SavedComicLightweight) => {
+      if (!token || loadingComicId) return;
+
+      setLoadingComicId(comic.id);
+      try {
+        const pagesWithUrls = await fetchComicPagesForPreview(comic.id, token);
+        if (pagesWithUrls && pagesWithUrls.length > 0) {
+          navigation.navigate("Preview", {
+            pages: pagesWithUrls,
+            isReadOnly: true,
+            title: comic.title,
+          });
         }
-      );
-      
-      if (response.ok) {
-        const { comic: fullComic } = await response.json();
-        const apiBase = getApiUrl();
-        const panelImageHref = (pageIdx: number, panelIdx: number) => {
-          const u = new URL(
-            `/api/comics/${fullComic.id}/page/${pageIdx}/panel/${panelIdx}/image`,
-            apiBase
-          );
-          u.searchParams.set("token", token);
-          return u.toString();
-        };
-        const pagesWithUrls = (fullComic.pages || []).map((page: any) => {
-          const pageIdx = page._pageIndex ?? 0;
-          const panelImages = Array.from({ length: page.panelCount || 0 }, (_, panelIdx) =>
-            panelImageHref(pageIdx, panelIdx)
-          );
-          // Prefer -1 when metadata says full-page; else first panel; else -1 so server can
-          // fall back from imageUrl → first panelImages entry (covers partial DB rows).
-          const imageUrl = page.hasImageUrl
-            ? panelImageHref(pageIdx, -1)
-            : panelImages.length > 0
-              ? panelImages[0]
-              : panelImageHref(pageIdx, -1);
-          return {
-            pageNumber: page.pageNumber,
-            imageUrl,
-            scenes: page.scenes,
-            panelImages,
-            panels: page.panels,
-            pageType: page.pageType,
-            generationMode: page.generationMode,
-          };
-        });
-        
-        navigation.navigate("Preview", {
-          pages: pagesWithUrls,
-          isReadOnly: true,
-          title: fullComic.title,
-        });
+      } catch (error) {
+        console.error("Error loading comic:", error);
+      } finally {
+        setLoadingComicId(null);
       }
-    } catch (error) {
-      console.error("Error loading comic:", error);
-    } finally {
-      setLoadingComicId(null);
-    }
-  };
-
-  const renderEmpty = () => (
-    <View style={styles.emptyContainer}>
-      <Image
-        source={require("../../assets/images/empty-history.png")}
-        style={styles.emptyImage}
-        resizeMode="contain"
-      />
-      <Text style={styles.emptyTitle}>No Comics Yet</Text>
-      <Text style={styles.emptySubtitle}>
-        Start creating your first comic story!
-      </Text>
-      <Pressable
-        style={styles.emptyButton}
-        onPress={() => navigation.getParent()?.navigate("CreateTab")}
-        testID="button-start-creating"
-      >
-        <Text style={styles.emptyButtonText}>Start Creating</Text>
-      </Pressable>
-    </View>
+    },
+    [token, loadingComicId, navigation]
   );
 
-  const renderItem = ({ item, index }: { item: SavedComicLightweight; index: number }) => {
-    const isLoadingThis = loadingComicId === item.id;
-    
-    return (
-      <ComicCard
-        title={item.title}
-        imageUrl={item.thumbnailUrl || undefined}
-        date={formatDate(item.createdAt)}
-        onPress={() => handleComicPress(item)}
-        style={[
-          styles.card,
-          { width: CARD_WIDTH, opacity: isLoadingThis ? 0.6 : 1 },
-          index % 2 === 0 ? { marginRight: 10 } : { marginLeft: 10 },
-        ]}
-        testID={`comic-card-${item.id}`}
-      />
-    );
-  };
-
-  const renderHeader = () => (
-    <>
-      <Animated.View entering={FadeIn.duration(200)}>
-        <Text style={styles.bigTitle}>Your</Text>
-        <Text style={styles.bigTitleAccent}>creations</Text>
-      </Animated.View>
-      {comics.length > 0 ? <BannerAd /> : null}
-    </>
+  const renderEmpty = useCallback(
+    () => (
+      <View style={styles.emptyContainer}>
+        <Image
+          source={require("../../assets/images/empty-history.png")}
+          style={styles.emptyImage}
+          resizeMode="contain"
+        />
+        <Text style={styles.emptyTitle}>No Comics Yet</Text>
+        <Text style={styles.emptySubtitle}>
+          Start creating your first comic story!
+        </Text>
+        <Pressable
+          style={styles.emptyButton}
+          onPress={() => navigation.getParent()?.navigate("CreateTab")}
+          testID="button-start-creating"
+        >
+          <Text style={styles.emptyButtonText}>Start Creating</Text>
+        </Pressable>
+      </View>
+    ),
+    [navigation]
   );
+
+  const renderItem = useCallback(
+    ({ item, index }: { item: SavedComicLightweight; index: number }) => {
+      const isLoadingThis = loadingComicId === item.id;
+
+      return (
+        <ComicCard
+          title={item.title}
+          imageUrl={item.thumbnailUrl || undefined}
+          date={formatDate(item.createdAt)}
+          onPress={() => handleComicPress(item)}
+          style={[
+            styles.card,
+            { width: CARD_WIDTH, opacity: isLoadingThis ? 0.6 : 1 },
+            index % 2 === 0 ? { marginRight: 10 } : { marginLeft: 10 },
+          ]}
+          testID={`comic-card-${item.id}`}
+        />
+      );
+    },
+    [loadingComicId, handleComicPress]
+  );
+
+  const renderHeader = useMemo(
+    () => (
+      <>
+        <Animated.View entering={FadeIn.duration(200)}>
+          <Text style={styles.bigTitle}>Your</Text>
+          <Text style={styles.bigTitleAccent}>creations</Text>
+        </Animated.View>
+        {comics.length > 0 ? <BannerAd /> : null}
+      </>
+    ),
+    [comics.length]
+  );
+
+  const keyExtractor = useCallback((item: SavedComicLightweight) => item.id, []);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -253,8 +230,13 @@ export default function HistoryScreen() {
       <FlatList
         data={comics}
         renderItem={renderItem}
-        keyExtractor={(item) => item.id}
+        keyExtractor={keyExtractor}
         numColumns={2}
+        initialNumToRender={8}
+        maxToRenderPerBatch={8}
+        windowSize={7}
+        updateCellsBatchingPeriod={50}
+        removeClippedSubviews={Platform.OS === "android"}
         contentContainerStyle={[
           styles.listContent,
           { paddingBottom: tabBarHeight + 20 },

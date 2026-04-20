@@ -112,6 +112,8 @@ export const comicJobs = pgTable("comic_jobs", {
   pagesCount: integer("pages_count"),
   pages: jsonb("pages").default([]).notNull(),
   error: text("error"),
+  /** Set when the finished job was persisted to `user_comics` so clients can open Preview with API image URLs. */
+  libraryComicId: integer("library_comic_id"),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });

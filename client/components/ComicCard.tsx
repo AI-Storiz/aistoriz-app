@@ -34,7 +34,7 @@ const springConfig: WithSpringConfig = {
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
-export function ComicCard({ title, imageUrl, date, onPress, style, testID }: ComicCardProps) {
+function ComicCardInner({ title, imageUrl, date, onPress, style, testID }: ComicCardProps) {
   const { theme } = useTheme();
   const { token } = useAuth();
   const scale = useSharedValue(1);
@@ -107,6 +107,8 @@ export function ComicCard({ title, imageUrl, date, onPress, style, testID }: Com
     </AnimatedPressable>
   );
 }
+
+export const ComicCard = React.memo(ComicCardInner);
 
 const styles = StyleSheet.create({
   card: {

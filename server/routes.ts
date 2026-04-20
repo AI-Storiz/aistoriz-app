@@ -582,6 +582,8 @@ interface ComicJob {
   pages: ComicPage[];
   characterNames?: string[];
   savedToLibrary?: boolean;
+  /** `user_comics.id` after server auto-save; lets the app open Preview without holding base64 in RAM. */
+  libraryComicId?: number;
   error?: string;
   createdAt: number;
 }
@@ -598,6 +600,7 @@ async function saveJobToDb(job: ComicJob): Promise<void> {
         title: job.title || null,
         pages: job.pages,
         error: job.error || null,
+        libraryComicId: job.libraryComicId ?? null,
         updatedAt: new Date(),
       }).where(eq(comicJobs.id, job.id));
     } else {
@@ -611,6 +614,7 @@ async function saveJobToDb(job: ComicJob): Promise<void> {
         pagesCount: job.pagesCount || null,
         pages: job.pages,
         error: job.error || null,
+        libraryComicId: job.libraryComicId ?? null,
       });
     }
     jobsCache.set(job.id, job);
@@ -639,6 +643,7 @@ async function getJobFromDb(jobId: string): Promise<ComicJob | null> {
         pagesCount: dbJob.pagesCount || undefined,
         pages: (dbJob.pages || []) as ComicPage[],
         error: dbJob.error || undefined,
+        libraryComicId: dbJob.libraryComicId ?? undefined,
         createdAt: new Date(dbJob.createdAt).getTime(),
       };
       jobsCache.set(jobId, job);
@@ -2305,12 +2310,13 @@ PANEL BORDER RESPECT (CRITICAL — ZERO TOLERANCE):
 
     if (job.userId && !job.savedToLibrary) {
       try {
-        await storage.createUserComic(job.userId, {
+        const comic = await storage.createUserComic(job.userId, {
           title: job.title || "Untitled Comic",
           style: job.style || "Comic",
           characterNames: job.characterNames || [],
           pages: job.pages,
         });
+        job.libraryComicId = comic.id;
         job.savedToLibrary = true;
         console.log(`Comic auto-saved to library for user ${job.userId}`);
       } catch (saveError) {
@@ -3646,12 +3652,13 @@ Dramatic professional cover art, eye-catching cinematic composition.`;
     // but savedToLibrary is still false, causing a duplicate save
     if (job.userId && !job.savedToLibrary) {
       try {
-        await storage.createUserComic(job.userId, {
+        const comic = await storage.createUserComic(job.userId, {
           title: job.title || "Untitled Comic",
           style: job.style || "Comic",
           characterNames: job.characterNames || [],
           pages: job.pages,
         });
+        job.libraryComicId = comic.id;
         job.savedToLibrary = true;
         console.log(`Comic auto-saved to library for user ${job.userId}`);
       } catch (saveError) {
@@ -5243,6 +5250,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         pages: job.pages,
         error: job.error,
         savedToLibrary: job.savedToLibrary || false,
+        libraryComicId: job.libraryComicId,
       });
     } else {
       res.json({

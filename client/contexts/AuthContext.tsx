@@ -1,4 +1,12 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  ReactNode,
+} from "react";
 import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as WebBrowser from "expo-web-browser";
@@ -118,7 +126,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  async function fetchUser(authToken: string) {
+  const fetchUser = useCallback(async (authToken: string) => {
     try {
       const response = await fetch(new URL("/api/auth/me", getApiUrl()).toString(), {
         headers: { Authorization: `Bearer ${authToken}` },
@@ -137,9 +145,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error("Failed to fetch user:", error);
     }
-  }
+  }, []);
 
-  async function registerPushToken(authToken: string) {
+  const registerPushToken = useCallback(async (authToken: string) => {
     try {
       if (!Device.isDevice) {
         console.log("Push notifications not available in simulator");
@@ -191,9 +199,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error("Failed to register push token:", error);
     }
-  }
+  }, []);
 
-  async function login(email: string, password: string): Promise<{ success: boolean; error?: string }> {
+  const login = useCallback(async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const response = await fetch(new URL("/api/auth/login", getApiUrl()).toString(), {
         method: "POST",
@@ -229,9 +237,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error: any) {
       return { success: false, error: error.message || "Network error" };
     }
-  }
+  }, [registerPushToken]);
 
-  async function register(email: string, password: string, referralCode?: string): Promise<{ success: boolean; error?: string }> {
+  const register = useCallback(async (email: string, password: string, referralCode?: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const response = await fetch(new URL("/api/auth/register", getApiUrl()).toString(), {
         method: "POST",
@@ -267,9 +275,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error: any) {
       return { success: false, error: error.message || "Network error" };
     }
-  }
+  }, [registerPushToken]);
 
-  async function loginWithGoogle(): Promise<{ success: boolean; error?: string }> {
+  const loginWithGoogle = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
     try {
       if (!oauthConfig.enabled) {
         return { success: false, error: "Google Sign-In is not configured" };
@@ -325,9 +333,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error("Google login error:", error);
       return { success: false, error: error.message || "Google login failed" };
     }
-  }
+  }, [registerPushToken, oauthConfig]);
 
-  async function logout() {
+  const logout = useCallback(async () => {
     try {
       if (token) {
         await fetch(new URL("/api/auth/logout", getApiUrl()).toString(), {
@@ -342,21 +350,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
     setToken(null);
     setUser(null);
-  }
+  }, [token]);
 
-  async function refreshUser() {
-    if (token) {
-      await fetchUser(token);
+  const refreshUser = useCallback(async () => {
+    const active = token ?? (await AsyncStorage.getItem(AUTH_TOKEN_KEY));
+    if (active) {
+      await fetchUser(active);
     }
-  }
+  }, [token, fetchUser]);
 
-  function updateCredits(newBalance: number) {
-    if (user) {
-      setUser({ ...user, credits: newBalance });
-    }
-  }
+  const updateCredits = useCallback((newBalance: number) => {
+    setUser((prev) => (prev ? { ...prev, credits: newBalance } : null));
+  }, []);
 
-  async function verifyEmail(code: string): Promise<{ success: boolean; error?: string }> {
+  const verifyEmail = useCallback(async (code: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const url = new URL("/api/auth/verify-email", getApiUrl()).toString();
       
@@ -392,9 +399,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error("Verify email error:", error);
       return { success: false, error: "Unable to connect to server. Please check your internet connection." };
     }
-  }
+  }, [token, fetchUser]);
 
-  async function resendVerification(): Promise<{ success: boolean; error?: string }> {
+  const resendVerification = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
     try {
       // Get token from storage to avoid stale closure issues
       const currentToken = token || await AsyncStorage.getItem(AUTH_TOKEN_KEY);
@@ -425,7 +432,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error: any) {
       return { success: false, error: error.message || "Network error" };
     }
-  }
+  }, [token]);
 
   const hasRequiredClientId = () => {
     if (!oauthConfig.enabled) return false;
@@ -434,25 +441,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return !!oauthConfig.googleWebClientId;
   };
 
+  const authValue = useMemo(
+    () => ({
+      user,
+      token,
+      isLoading,
+      isAuthenticated: !!user,
+      isEmailVerified: user?.emailVerified ?? false,
+      isGoogleAuthEnabled: oauthConfig.enabled,
+      login,
+      register,
+      loginWithGoogle,
+      logout,
+      refreshUser,
+      updateCredits,
+      verifyEmail,
+      resendVerification,
+    }),
+    [
+      user,
+      token,
+      isLoading,
+      oauthConfig.enabled,
+      user?.emailVerified,
+      login,
+      register,
+      loginWithGoogle,
+      logout,
+      refreshUser,
+      updateCredits,
+      verifyEmail,
+      resendVerification,
+    ]
+  );
+
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        token,
-        isLoading,
-        isAuthenticated: !!user,
-        isEmailVerified: user?.emailVerified ?? false,
-        isGoogleAuthEnabled: oauthConfig.enabled,
-        login,
-        register,
-        loginWithGoogle,
-        logout,
-        refreshUser,
-        updateCredits,
-        verifyEmail,
-        resendVerification,
-      }}
-    >
+    <AuthContext.Provider value={authValue}>
       {oauthConfigLoaded && hasRequiredClientId() ? (
         <GoogleAuthInitializer
           config={{
