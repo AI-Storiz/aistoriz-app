@@ -35,6 +35,28 @@ function getBase64ImageSize(dataUri: string | undefined | null): number | null {
   }
 }
 
+/**
+ * Comic pages are often stored as data:image/...;base64,... in Postgres.
+ * On revisit, the app loads those via HTTP; we must decode here — never redirect to a
+ * data: URL (Location headers are unreliable; Expo Image often shows a blank image).
+ */
+function decodeComicDataUriToBuffer(imageData: string): { buffer: Buffer; contentType: string } | null {
+  const trimmed = imageData.trim();
+  const m = trimmed.match(/^data:image\/([\w.+-]+);base64,([\s\S]*)$/i);
+  if (!m) return null;
+  const subtypeRaw = m[1].toLowerCase();
+  const b64 = m[2].replace(/\s/g, "");
+  if (!b64) return null;
+  try {
+    const buffer = Buffer.from(b64, "base64");
+    if (!buffer.length) return null;
+    const mimeSubtype = subtypeRaw === "jpg" ? "jpeg" : subtypeRaw;
+    return { buffer, contentType: `image/${mimeSubtype}` };
+  } catch {
+    return null;
+  }
+}
+
 const JWT_SECRET = process.env.SESSION_SECRET || "fallback-jwt-secret-key";
 
 // Utility function to chunk an array into batches for parallel processing
@@ -4950,25 +4972,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!imageData) {
         return res.status(404).json({ error: "Image not found" });
       }
-      
-      const base64Match = imageData.match(/^data:image\/(png|jpeg|jpg|webp);base64,(.+)$/);
-      if (base64Match) {
-        const mimeType = base64Match[1] === 'jpg' ? 'jpeg' : base64Match[1];
-        const buffer = Buffer.from(base64Match[2], 'base64');
-        const crypto = require('crypto');
-        const etag = crypto.createHash('md5').update(buffer.slice(0, 1024)).digest('hex');
-        
-        if (req.headers['if-none-match'] === etag) {
+
+      const decoded = decodeComicDataUriToBuffer(imageData);
+      if (decoded) {
+        const { buffer, contentType } = decoded;
+        const etag = crypto.createHash("md5").update(buffer.subarray(0, Math.min(1024, buffer.length))).digest("hex");
+
+        if (req.headers["if-none-match"] === etag) {
           return res.status(304).end();
         }
-        
-        res.set('Content-Type', `image/${mimeType}`);
-        res.set('Cache-Control', 'public, max-age=604800, immutable');
-        res.set('ETag', etag);
+
+        res.set("Content-Type", contentType);
+        res.set("Cache-Control", "public, max-age=604800, immutable");
+        res.set("ETag", etag);
         return res.send(buffer);
       }
-      
-      return res.redirect(imageData);
+
+      const trimmed = imageData.trim();
+      if (/^https?:\/\//i.test(trimmed)) {
+        return res.redirect(trimmed);
+      }
+
+      return res.status(404).json({ error: "Image not found or unsupported format" });
     } catch (error: any) {
       console.error("Get panel image error:", error);
       res.status(500).json({ error: "Failed to get image" });

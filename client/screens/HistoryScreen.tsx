@@ -89,15 +89,19 @@ export default function HistoryScreen() {
       if (response.ok) {
         const { comics: apiComics } = await response.json();
         const apiBase = getApiUrl();
-        const mappedComics: SavedComicLightweight[] = apiComics.map((c: any) => ({
-          id: c.id.toString(),
-          title: c.title,
-          createdAt: c.createdAt,
-          style: c.style || '',
-          characterNames: c.characterNames || [],
-          pagesCount: c.pagesCount || 0,
-          thumbnailUrl: `${apiBase}/api/comics/${c.id}/page/0/panel/-1/image?token=${token}`,
-        }));
+        const mappedComics: SavedComicLightweight[] = apiComics.map((c: any) => {
+          const thumb = new URL(`/api/comics/${c.id}/page/0/panel/-1/image`, apiBase);
+          thumb.searchParams.set("token", token);
+          return {
+            id: c.id.toString(),
+            title: c.title,
+            createdAt: c.createdAt,
+            style: c.style || "",
+            characterNames: c.characterNames || [],
+            pagesCount: c.pagesCount || 0,
+            thumbnailUrl: thumb.toString(),
+          };
+        });
         setComics(mappedComics);
       } else {
         setComics([]);
@@ -134,13 +138,21 @@ export default function HistoryScreen() {
       if (response.ok) {
         const { comic: fullComic } = await response.json();
         const apiBase = getApiUrl();
+        const panelImageHref = (pageIdx: number, panelIdx: number) => {
+          const u = new URL(
+            `/api/comics/${fullComic.id}/page/${pageIdx}/panel/${panelIdx}/image`,
+            apiBase
+          );
+          u.searchParams.set("token", token);
+          return u.toString();
+        };
         const pagesWithUrls = (fullComic.pages || []).map((page: any) => {
           const pageIdx = page._pageIndex ?? 0;
           const panelImages = Array.from({ length: page.panelCount || 0 }, (_, panelIdx) =>
-            `${apiBase}/api/comics/${fullComic.id}/page/${pageIdx}/panel/${panelIdx}/image?token=${token}`
+            panelImageHref(pageIdx, panelIdx)
           );
           const imageUrl = page.hasImageUrl
-            ? `${apiBase}/api/comics/${fullComic.id}/page/${pageIdx}/panel/-1/image?token=${token}`
+            ? panelImageHref(pageIdx, -1)
             : (panelImages.length > 0 ? panelImages[0] : "");
           return {
             pageNumber: page.pageNumber,
