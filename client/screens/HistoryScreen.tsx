@@ -14,13 +14,13 @@ import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { Feather } from "@expo/vector-icons";
-import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
+import LottieView from "lottie-react-native";
+import Animated, { FadeIn } from "react-native-reanimated";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { getApiUrl, onHistoryRefresh } from "@/lib/query-client";
 import { fetchComicPagesForPreview } from "@/lib/comicPreviewUrls";
 import { ComicCard } from "@/components/ComicCard";
-import { Button } from "@/components/Button";
 import FooterTextAd from "@/components/FooterTextAd";
 import BannerAd from "@/components/BannerAd";
 import type { RootStackParamList } from "@/navigation/RootStackNavigator";
@@ -47,6 +47,8 @@ const COLORS = {
 
 const { width } = Dimensions.get("window");
 const CARD_WIDTH = (width - 60) / 2;
+
+const HISTORY_LOADER_ANIMATION = require("../../assets/animations/comic-loader.json");
 
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
@@ -227,27 +229,45 @@ export default function HistoryScreen() {
         </Pressable>
       </View>
 
-      <FlatList
-        data={comics}
-        renderItem={renderItem}
-        keyExtractor={keyExtractor}
-        numColumns={2}
-        initialNumToRender={8}
-        maxToRenderPerBatch={8}
-        windowSize={7}
-        updateCellsBatchingPeriod={50}
-        removeClippedSubviews={Platform.OS === "android"}
-        contentContainerStyle={[
-          styles.listContent,
-          { paddingBottom: tabBarHeight + 20 },
-          comics.length === 0 && styles.emptyList,
-        ]}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={!loading ? renderEmpty : null}
-        ListHeaderComponent={renderHeader}
-        ListFooterComponent={comics.length > 0 ? <FooterTextAd /> : null}
-        testID="history-list"
-      />
+      <View style={styles.listArea}>
+        <FlatList
+          data={comics}
+          renderItem={renderItem}
+          keyExtractor={keyExtractor}
+          numColumns={2}
+          initialNumToRender={8}
+          maxToRenderPerBatch={8}
+          windowSize={7}
+          updateCellsBatchingPeriod={50}
+          removeClippedSubviews={Platform.OS === "android"}
+          contentContainerStyle={[
+            styles.listContent,
+            { paddingBottom: tabBarHeight + 20 },
+            comics.length === 0 && styles.emptyList,
+          ]}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={!loading ? renderEmpty : null}
+          ListHeaderComponent={renderHeader}
+          ListFooterComponent={comics.length > 0 ? <FooterTextAd /> : null}
+          testID="history-list"
+        />
+        {loading ? (
+          <Animated.View
+            entering={FadeIn.duration(280)}
+            style={styles.loadingOverlay}
+            pointerEvents="auto"
+            testID="history-loading"
+          >
+            <LottieView
+              source={HISTORY_LOADER_ANIMATION}
+              autoPlay
+              loop
+              style={styles.loadingLottie}
+            />
+            <Text style={styles.loadingLabel}>Loading your creations…</Text>
+          </Animated.View>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -304,6 +324,29 @@ const styles = StyleSheet.create({
     color: COLORS.accent,
     fontFamily: "Nunito_700Bold",
     marginBottom: 20,
+  },
+  listArea: {
+    flex: 1,
+    position: "relative",
+  },
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(229, 231, 235, 0.92)",
+    paddingHorizontal: 32,
+  },
+  loadingLottie: {
+    width: 168,
+    height: 168,
+  },
+  loadingLabel: {
+    marginTop: 8,
+    fontSize: 16,
+    fontWeight: "600",
+    color: COLORS.dim,
+    fontFamily: "Nunito_600SemiBold",
+    textAlign: "center",
   },
   listContent: {
     paddingTop: 8,
