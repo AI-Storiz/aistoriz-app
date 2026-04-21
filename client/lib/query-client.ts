@@ -130,18 +130,3 @@ export const queryClient = new QueryClient({
     },
   },
 });
-
-// Simple event emitter for history refresh
-type HistoryRefreshListener = () => void;
-const historyRefreshListeners: Set<HistoryRefreshListener> = new Set();
-
-export function onHistoryRefresh(listener: HistoryRefreshListener): () => void {
-  historyRefreshListeners.add(listener);
-  return () => {
-    historyRefreshListeners.delete(listener);
-  };
-}
-
-export function triggerHistoryRefresh(): void {
-  historyRefreshListeners.forEach((listener) => listener());
-}

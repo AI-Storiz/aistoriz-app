@@ -15,6 +15,7 @@ import * as Notifications from "expo-notifications";
 import * as Device from "expo-device";
 import Constants from "expo-constants";
 import { getApiUrl } from "@/lib/query-client";
+import { clearHistory, store } from "@/store";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -350,6 +351,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
     setToken(null);
     setUser(null);
+    store.dispatch(clearHistory());
   }, [token]);
 
   const refreshUser = useCallback(async () => {

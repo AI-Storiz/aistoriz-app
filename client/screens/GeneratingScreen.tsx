@@ -26,7 +26,8 @@ import { Spacing, BorderRadius } from "@/constants/theme";
 import { ThemedText } from "@/components/ThemedText";
 import { Button } from "@/components/Button";
 import { ComicBackground } from "@/components/ComicBackground";
-import { getApiUrl, triggerHistoryRefresh } from "@/lib/query-client";
+import { getApiUrl } from "@/lib/query-client";
+import { triggerHistoryRefresh } from "@/store";
 import { fetchComicPagesForPreview } from "@/lib/comicPreviewUrls";
 import { compressComicPages } from "@/lib/imageCompression";
 import type { RootStackParamList } from "@/navigation/RootStackNavigator";
@@ -567,8 +568,8 @@ export default function GeneratingScreen() {
 
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-        // Trigger history refresh so History tab shows the new comic
-        triggerHistoryRefresh();
+        // Refresh history in the background so the History tab stays up to date
+        triggerHistoryRefresh(token);
 
         // Navigate to preview - comic is already saved (either by server or client)
         navigation.replace("Preview", {
