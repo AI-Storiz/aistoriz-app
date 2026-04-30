@@ -74,7 +74,7 @@ export default function PrivacyScreen() {
       <View style={[styles.section, { backgroundColor: theme.backgroundDefault }]}>
         <ThemedText type="h3" style={styles.sectionTitle}>6. Contact Us</ThemedText>
         <ThemedText style={styles.paragraph}>
-          If you have any questions about this Privacy Policy, please contact us at info@aidynamiz.com
+          If you have any questions about this Privacy Policy, please contact us at info@fiocreatives.com
         </ThemedText>
       </View>
     </ScrollView>

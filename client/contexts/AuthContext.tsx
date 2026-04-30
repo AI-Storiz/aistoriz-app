@@ -1,4 +1,12 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  ReactNode,
+} from "react";
 import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as WebBrowser from "expo-web-browser";
@@ -7,6 +15,7 @@ import * as Notifications from "expo-notifications";
 import * as Device from "expo-device";
 import Constants from "expo-constants";
 import { getApiUrl } from "@/lib/query-client";
+import { clearHistory, store } from "@/store";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -51,6 +60,30 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const AUTH_TOKEN_KEY = "@ai_storiz_auth_token";
 
+type ParseJsonResult<T> = { ok: true; data: T } | { ok: false; error: string };
+
+async function parseJsonResponse<T = Record<string, unknown>>(
+  response: Response,
+): Promise<ParseJsonResult<T>> {
+  const text = await response.text();
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return {
+      ok: false,
+      error:
+        "Empty response from the API. Run the backend (npm run server:dev on port 5000). On a phone, use the same Wi‑Fi and ensure the app reaches your computer’s IP, not only localhost.",
+    };
+  }
+  try {
+    return { ok: true, data: JSON.parse(trimmed) as T };
+  } catch {
+    return {
+      ok: false,
+      error: `Invalid response from server (HTTP ${response.status}). The API may be down or the wrong URL is configured.`,
+    };
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
@@ -68,8 +101,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const response = await fetch(new URL("/api/oauth-config", getApiUrl()).toString());
       if (response.ok) {
-        const config = await response.json();
-        setOauthConfig(config);
+        const parsed = await parseJsonResponse<OAuthConfig>(response);
+        if (parsed.ok) {
+          setOauthConfig(parsed.data);
+        }
       }
     } catch (error) {
       console.error("Failed to load OAuth config:", error);
@@ -92,15 +127,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  async function fetchUser(authToken: string) {
+  const fetchUser = useCallback(async (authToken: string) => {
     try {
       const response = await fetch(new URL("/api/auth/me", getApiUrl()).toString(), {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       
       if (response.ok) {
-        const userData = await response.json();
-        setUser(userData);
+        const parsed = await parseJsonResponse<User>(response);
+        if (parsed.ok) {
+          setUser(parsed.data);
+        }
       } else {
         await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
         setToken(null);
@@ -109,9 +146,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error("Failed to fetch user:", error);
     }
-  }
+  }, []);
 
-  async function registerPushToken(authToken: string) {
+  const registerPushToken = useCallback(async (authToken: string) => {
     try {
       if (!Device.isDevice) {
         console.log("Push notifications not available in simulator");
@@ -163,9 +200,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error("Failed to register push token:", error);
     }
-  }
+  }, []);
 
-  async function login(email: string, password: string): Promise<{ success: boolean; error?: string }> {
+  const login = useCallback(async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const response = await fetch(new URL("/api/auth/login", getApiUrl()).toString(), {
         method: "POST",
@@ -173,9 +210,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ email, password }),
       });
 
-      const data = await response.json();
+      const parsed = await parseJsonResponse<{
+        token?: string;
+        user?: User;
+        error?: string;
+      }>(response);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error };
+      }
+      const data = parsed.data;
 
       if (response.ok) {
+        if (!data.token || !data.user) {
+          return {
+            success: false,
+            error: "Invalid login response from server (missing token or user).",
+          };
+        }
         await AsyncStorage.setItem(AUTH_TOKEN_KEY, data.token);
         setToken(data.token);
         setUser(data.user);
@@ -187,9 +238,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error: any) {
       return { success: false, error: error.message || "Network error" };
     }
-  }
+  }, [registerPushToken]);
 
-  async function register(email: string, password: string, referralCode?: string): Promise<{ success: boolean; error?: string }> {
+  const register = useCallback(async (email: string, password: string, referralCode?: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const response = await fetch(new URL("/api/auth/register", getApiUrl()).toString(), {
         method: "POST",
@@ -197,9 +248,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ email, password, referralCode: referralCode?.trim() || undefined }),
       });
 
-      const data = await response.json();
+      const parsed = await parseJsonResponse<{
+        token?: string;
+        user?: User;
+        error?: string;
+      }>(response);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error };
+      }
+      const data = parsed.data;
 
       if (response.ok) {
+        if (!data.token || !data.user) {
+          return {
+            success: false,
+            error: "Invalid registration response from server (missing token or user).",
+          };
+        }
         await AsyncStorage.setItem(AUTH_TOKEN_KEY, data.token);
         setToken(data.token);
         setUser(data.user);
@@ -211,9 +276,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error: any) {
       return { success: false, error: error.message || "Network error" };
     }
-  }
+  }, [registerPushToken]);
 
-  async function loginWithGoogle(): Promise<{ success: boolean; error?: string }> {
+  const loginWithGoogle = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
     try {
       if (!oauthConfig.enabled) {
         return { success: false, error: "Google Sign-In is not configured" };
@@ -240,9 +305,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }),
       });
 
-      const data = await response.json();
+      const parsed = await parseJsonResponse<{
+        token?: string;
+        user?: User;
+        error?: string;
+      }>(response);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error };
+      }
+      const data = parsed.data;
 
       if (response.ok) {
+        if (!data.token || !data.user) {
+          return {
+            success: false,
+            error: "Invalid Google sign-in response from server.",
+          };
+        }
         await AsyncStorage.setItem(AUTH_TOKEN_KEY, data.token);
         setToken(data.token);
         setUser(data.user);
@@ -255,9 +334,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error("Google login error:", error);
       return { success: false, error: error.message || "Google login failed" };
     }
-  }
+  }, [registerPushToken, oauthConfig]);
 
-  async function logout() {
+  const logout = useCallback(async () => {
     try {
       if (token) {
         await fetch(new URL("/api/auth/logout", getApiUrl()).toString(), {
@@ -272,21 +351,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
     setToken(null);
     setUser(null);
-  }
+    store.dispatch(clearHistory());
+  }, [token]);
 
-  async function refreshUser() {
-    if (token) {
-      await fetchUser(token);
+  const refreshUser = useCallback(async () => {
+    const active = token ?? (await AsyncStorage.getItem(AUTH_TOKEN_KEY));
+    if (active) {
+      await fetchUser(active);
     }
-  }
+  }, [token, fetchUser]);
 
-  function updateCredits(newBalance: number) {
-    if (user) {
-      setUser({ ...user, credits: newBalance });
-    }
-  }
+  const updateCredits = useCallback((newBalance: number) => {
+    setUser((prev) => (prev ? { ...prev, credits: newBalance } : null));
+  }, []);
 
-  async function verifyEmail(code: string): Promise<{ success: boolean; error?: string }> {
+  const verifyEmail = useCallback(async (code: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const url = new URL("/api/auth/verify-email", getApiUrl()).toString();
       
@@ -306,12 +385,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ code }),
       });
 
-      const data = await response.json();
+      const parsed = await parseJsonResponse<{ error?: string }>(response);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error };
+      }
+      const data = parsed.data;
 
       if (response.ok) {
-        if (user) {
-          setUser({ ...user, emailVerified: true });
-        }
+        await fetchUser(currentToken);
         return { success: true };
       } else {
         return { success: false, error: data.error || "Verification failed" };
@@ -320,9 +401,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error("Verify email error:", error);
       return { success: false, error: "Unable to connect to server. Please check your internet connection." };
     }
-  }
+  }, [token, fetchUser]);
 
-  async function resendVerification(): Promise<{ success: boolean; error?: string }> {
+  const resendVerification = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
     try {
       // Get token from storage to avoid stale closure issues
       const currentToken = token || await AsyncStorage.getItem(AUTH_TOKEN_KEY);
@@ -339,7 +420,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         },
       });
 
-      const data = await response.json();
+      const parsed = await parseJsonResponse<{ error?: string }>(response);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error };
+      }
+      const data = parsed.data;
 
       if (response.ok) {
         return { success: true };
@@ -349,7 +434,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error: any) {
       return { success: false, error: error.message || "Network error" };
     }
-  }
+  }, [token]);
 
   const hasRequiredClientId = () => {
     if (!oauthConfig.enabled) return false;
@@ -358,25 +443,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return !!oauthConfig.googleWebClientId;
   };
 
+  const authValue = useMemo(
+    () => ({
+      user,
+      token,
+      isLoading,
+      isAuthenticated: !!user,
+      isEmailVerified: user?.emailVerified ?? false,
+      isGoogleAuthEnabled: oauthConfig.enabled,
+      login,
+      register,
+      loginWithGoogle,
+      logout,
+      refreshUser,
+      updateCredits,
+      verifyEmail,
+      resendVerification,
+    }),
+    [
+      user,
+      token,
+      isLoading,
+      oauthConfig.enabled,
+      user?.emailVerified,
+      login,
+      register,
+      loginWithGoogle,
+      logout,
+      refreshUser,
+      updateCredits,
+      verifyEmail,
+      resendVerification,
+    ]
+  );
+
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        token,
-        isLoading,
-        isAuthenticated: !!user,
-        isEmailVerified: user?.emailVerified ?? false,
-        isGoogleAuthEnabled: oauthConfig.enabled,
-        login,
-        register,
-        loginWithGoogle,
-        logout,
-        refreshUser,
-        updateCredits,
-        verifyEmail,
-        resendVerification,
-      }}
-    >
+    <AuthContext.Provider value={authValue}>
       {oauthConfigLoaded && hasRequiredClientId() ? (
         <GoogleAuthInitializer
           config={{

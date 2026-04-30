@@ -14,8 +14,10 @@ import {
   Nunito_800ExtraBold,
 } from "@expo-google-fonts/nunito";
 
+import { Provider } from "react-redux";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/query-client";
+import { store } from "@/store";
 
 import RootStackNavigator from "@/navigation/RootStackNavigator";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -45,22 +47,24 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <QueryClientProvider client={queryClient}>
-        <AuthProvider>
-          <AdsProvider>
-            <SafeAreaProvider>
-              <GestureHandlerRootView style={styles.root}>
-                <KeyboardProvider>
-                  <NavigationContainer ref={navigationRef}>
-                    <RootStackNavigator />
-                  </NavigationContainer>
-                  <StatusBar style="dark" />
-                </KeyboardProvider>
-              </GestureHandlerRootView>
-            </SafeAreaProvider>
-          </AdsProvider>
-        </AuthProvider>
-      </QueryClientProvider>
+      <Provider store={store}>
+        <QueryClientProvider client={queryClient}>
+          <AuthProvider>
+            <AdsProvider>
+              <SafeAreaProvider>
+                <GestureHandlerRootView style={styles.root}>
+                  <KeyboardProvider>
+                    <NavigationContainer ref={navigationRef}>
+                      <RootStackNavigator />
+                    </NavigationContainer>
+                    <StatusBar style="dark" />
+                  </KeyboardProvider>
+                </GestureHandlerRootView>
+              </SafeAreaProvider>
+            </AdsProvider>
+          </AuthProvider>
+        </QueryClientProvider>
+      </Provider>
     </ErrorBoundary>
   );
 }

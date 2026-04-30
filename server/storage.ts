@@ -3,6 +3,7 @@ import { db } from "./db";
 import { eq, sql, and, desc, gte } from "drizzle-orm";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
+import { normalizeComicPagesOrder } from "./comicS3";
 
 function generateUserId(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -65,7 +66,7 @@ export class DatabaseStorage implements IStorage {
         email,
         password: hashedPassword,
         userId,
-        credits: 50,
+        credits: 20,
         subscriptionStatus: "none",
         emailVerified: false,
         verificationCode: verificationCode || null,
@@ -400,7 +401,29 @@ export class DatabaseStorage implements IStorage {
     return comics;
   }
 
+  /**
+   * Strips leading pages with no images and renumbers pageNumber. Persists when changed
+   * so list metadata, thumbnails, and /page/0/... all match the same array.
+   */
+  private async ensureComicPagesNormalized(id: number, userId: string): Promise<void> {
+    const [row] = await db
+      .select({ pages: userComics.pages })
+      .from(userComics)
+      .where(and(eq(userComics.id, id), eq(userComics.userId, userId)));
+    if (!row?.pages) {
+      return;
+    }
+    const { pages: next, changed } = normalizeComicPagesOrder(row.pages as unknown[]);
+    if (changed) {
+      await db
+        .update(userComics)
+        .set({ pages: next as any, updatedAt: new Date() })
+        .where(and(eq(userComics.id, id), eq(userComics.userId, userId)));
+    }
+  }
+
   async getUserComicById(id: number, userId: string): Promise<UserComic | undefined> {
+    await this.ensureComicPagesNormalized(id, userId);
     const [comic] = await db
       .select()
       .from(userComics)
@@ -413,6 +436,7 @@ export class DatabaseStorage implements IStorage {
     characterNames: unknown; createdAt: Date;
     pagesMetadata: Array<{ pageNumber: number; pageType: string; panelCount: number; panels: any; scenes: any; hasImageUrl: boolean }>;
   } | undefined> {
+    await this.ensureComicPagesNormalized(id, userId);
     const [comic] = await db
       .select({
         id: userComics.id,
@@ -428,7 +452,16 @@ export class DatabaseStorage implements IStorage {
             'panelCount', COALESCE(jsonb_array_length(page->'panelImages'), 0),
             'panels', page->'panels',
             'scenes', page->'scenes',
-            'hasImageUrl', (page->>'imageUrl' IS NOT NULL OR page->>'imageUri' IS NOT NULL),
+            'hasImageUrl', (
+              length(btrim(coalesce(page->>'imageUrl', ''))) > 0
+              OR length(btrim(coalesce(page->>'imageUri', ''))) > 0
+              OR EXISTS (
+                SELECT 1 FROM jsonb_array_elements_text(
+                  COALESCE(page->'panelImages', '[]'::jsonb)
+                ) AS t(val)
+                WHERE length(btrim(val)) > 0
+              )
+            ),
             'generationMode', page->>'generationMode'
           ))
           FROM jsonb_array_elements(${userComics.pages}) AS page
@@ -449,34 +482,104 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
+  /**
+   * First non-empty imageUrl / imageUri / panel in array order. Shared by thumbnails and
+   * cover `panel/-1` fallback when slot 0 is blank but a later page has art.
+   */
+  private firstNonEmptyImageFromPages(pages: unknown[]): string | null {
+    for (const raw of pages) {
+      if (raw == null || typeof raw !== "object") {
+        continue;
+      }
+      const p = raw as Record<string, unknown>;
+      const u = typeof p.imageUrl === "string" ? p.imageUrl.trim() : "";
+      if (u) {
+        return u;
+      }
+      const iu = typeof p.imageUri === "string" ? p.imageUri.trim() : "";
+      if (iu) {
+        return iu;
+      }
+      const pan = p.panelImages;
+      if (Array.isArray(pan)) {
+        for (const cell of pan) {
+          if (typeof cell === "string" && cell.trim()) {
+            return cell.trim();
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Resolves the image URL for a panel (`panelIndex === -1` = full-page or first panel fallback). */
   async getComicPanelImage(comicId: number, userId: string, pageIndex: number, panelIndex: number): Promise<string | null> {
-    const safePageIdx = Math.max(0, Math.floor(pageIndex));
+    const safePageIdx = Math.max(0, Math.min(512, Math.floor(pageIndex)));
     const safePanelIdx = Math.floor(panelIndex);
-    
-    let sqlQuery;
-    if (safePanelIdx === -1) {
-      sqlQuery = sql<string>`
-        COALESCE(
-          ${userComics.pages}->${sql.raw(String(safePageIdx))}->>'imageUrl',
-          ${userComics.pages}->${sql.raw(String(safePageIdx))}->>'imageUri'
-        )
-      `;
-    } else {
-      sqlQuery = sql<string>`
-        ${userComics.pages}->${sql.raw(String(safePageIdx))}->'panelImages'->>${sql.raw(String(safePanelIdx))}
-      `;
+
+    const comic = await this.getUserComicById(comicId, userId);
+    if (!comic?.pages || !Array.isArray(comic.pages)) {
+      return null;
     }
-    
-    const [result] = await db
-      .select({ imageData: sqlQuery })
-      .from(userComics)
-      .where(and(eq(userComics.id, comicId), eq(userComics.userId, userId)));
-    
-    if (!result?.imageData) {
+    const page = comic.pages[safePageIdx];
+    if (page == null || typeof page !== "object") {
       console.log(`Image not found: comic=${comicId}, page=${safePageIdx}, panel=${safePanelIdx}`);
+      return null;
     }
-    
-    return result?.imageData || null;
+    const p = page as Record<string, unknown>;
+
+    if (safePanelIdx === -1) {
+      const u = typeof p.imageUrl === "string" ? p.imageUrl.trim() : "";
+      if (u) {
+        return u;
+      }
+      const i = typeof p.imageUri === "string" ? p.imageUri.trim() : "";
+      if (i) {
+        return i;
+      }
+      const pan = p.panelImages;
+      if (Array.isArray(pan)) {
+        for (const cell of pan) {
+          if (typeof cell === "string" && cell.trim()) {
+            return cell.trim();
+          }
+        }
+      }
+      // Cover slot (page 0) may be empty while a later page has the real art; match history thumbnail.
+      if (safePageIdx === 0) {
+        const fromAny = this.firstNonEmptyImageFromPages(comic.pages);
+        if (fromAny) {
+          return fromAny;
+        }
+      }
+      console.log(`Image not found: comic=${comicId}, page=${safePageIdx}, panel=${safePanelIdx}`);
+      return null;
+    }
+
+    const pan = p.panelImages;
+    if (!Array.isArray(pan) || safePanelIdx < 0 || safePanelIdx >= pan.length) {
+      console.log(`Image not found: comic=${comicId}, page=${safePageIdx}, panel=${safePanelIdx}`);
+      return null;
+    }
+    const cell = pan[safePanelIdx];
+    const t = typeof cell === "string" && cell.trim() ? cell.trim() : "";
+    if (!t) {
+      console.log(`Image not found: comic=${comicId}, page=${safePageIdx}, panel=${safePanelIdx}`);
+      return null;
+    }
+    return t;
+  }
+
+  /**
+   * First available image URL in `pages` order (cover may be empty; skips blank slots).
+   * Used for list thumbnails, not a specific page index.
+   */
+  async getComicFirstImageUrl(comicId: number, userId: string): Promise<string | null> {
+    const comic = await this.getUserComicById(comicId, userId);
+    if (!comic?.pages || !Array.isArray(comic.pages)) {
+      return null;
+    }
+    return this.firstNonEmptyImageFromPages(comic.pages);
   }
 
   async createUserComic(userId: string, data: { title: string; style: string; characterNames: string[]; pages: any[] }): Promise<UserComic> {

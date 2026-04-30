@@ -1,7 +1,7 @@
 // Email service using Resend API
 import { Resend } from 'resend';
 
-const FROM_EMAIL = 'info@eggnetwork.io';
+const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'info@fiocreatives.com';
 
 function getResendClient() {
   const apiKey = process.env.RESEND_API_KEY;
@@ -143,7 +143,7 @@ export async function sendWelcomeEmail(to: string) {
             </p>
             
             <p style="color: #333; font-size: 16px; line-height: 1.6;">
-              You've received <strong>50 free credits</strong> to get started. Here's what you can do:
+              You've received <strong>20 free credits</strong> to get started. Here's what you can do:
             </p>
             
             <ul style="color: #333; font-size: 16px; line-height: 1.8;">

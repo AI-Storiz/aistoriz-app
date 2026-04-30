@@ -22,12 +22,12 @@ async function seed() {
     // Seed Credit Settings
     console.log("📊 Seeding credit settings...");
     await db.insert(creditSettings).values({
-      baseCost: 50,
+      baseCost: 20,
       costPerPage: 15,
       adsCreditsReward: 25,
       maxAdsPerDay: 5,
-      weeklyPlanCredits: 300,
-      weeklyPlanPrice: "6.99",
+      weeklyPlanCredits: 270,
+      weeklyPlanPrice: "7.02",
       yearlyPlanCredits: 3000,
       yearlyPlanPrice: "69.00",
       topUp1Credits: 100,

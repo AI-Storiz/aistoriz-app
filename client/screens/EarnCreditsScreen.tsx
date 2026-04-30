@@ -20,6 +20,7 @@ import { getApiUrl } from "@/lib/query-client";
 import { Colors, Spacing, Fonts, BorderRadius } from "@/constants/theme";
 import FooterTextAd from "@/components/FooterTextAd";
 import BannerAd from "@/components/BannerAd";
+import { showRewardedAd } from "@/lib/rewardedAd";
 
 interface CreditSettings {
   adsCreditsReward: number;
@@ -33,6 +34,7 @@ export default function EarnCreditsScreen() {
   const { user, token, refreshUser, updateCredits } = useAuth();
   const [isWatching, setIsWatching] = useState(false);
   const [settings, setSettings] = useState<CreditSettings | null>(null);
+  const [settingsLoading, setSettingsLoading] = useState(true);
   const [adsWatchedToday, setAdsWatchedToday] = useState(0);
 
   useEffect(() => {
@@ -43,6 +45,7 @@ export default function EarnCreditsScreen() {
   }, [user]);
 
   async function fetchSettings() {
+    setSettingsLoading(true);
     try {
       const response = await fetch(new URL("/api/credits/settings", getApiUrl()).toString());
       if (response.ok) {
@@ -51,12 +54,21 @@ export default function EarnCreditsScreen() {
       }
     } catch (error) {
       console.error("Failed to fetch credit settings:", error);
+    } finally {
+      setSettingsLoading(false);
     }
   }
 
   async function handleWatchAd() {
-    if (!token || !settings) return;
-    
+    if (!token) {
+      Alert.alert("Sign in required", "Please log in to earn credits from ads.");
+      return;
+    }
+    if (!settings) {
+      Alert.alert("Please wait", "Still loading reward settings. Try again in a moment.");
+      return;
+    }
+
     if (adsWatchedToday >= settings.maxAdsPerDay) {
       Alert.alert("Daily Limit Reached", "You've watched the maximum number of ads for today. Come back tomorrow!");
       return;
@@ -66,8 +78,16 @@ export default function EarnCreditsScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     try {
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      
+      const adResult = await showRewardedAd();
+      if (adResult === "dismissed") {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        Alert.alert("Ad not completed", "Watch the full video to earn credits.");
+        return;
+      }
+      if (adResult === "fallback") {
+        await new Promise((resolve) => setTimeout(resolve, 2800));
+      }
+
       const response = await fetch(new URL("/api/credits/watch-ad", getApiUrl()).toString(), {
         method: "POST",
         headers: {
@@ -82,6 +102,7 @@ export default function EarnCreditsScreen() {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         updateCredits(data.newBalance);
         setAdsWatchedToday(data.adsWatchedToday);
+        await refreshUser();
         Alert.alert(
           "Credits Earned!",
           `You earned ${data.creditsEarned} credits!\n\nNew balance: ${data.newBalance} credits`
@@ -99,7 +120,7 @@ export default function EarnCreditsScreen() {
   }
 
   const adsRemaining = settings ? settings.maxAdsPerDay - adsWatchedToday : 0;
-  const canWatchAd = adsRemaining > 0 && !isWatching;
+  const canWatchAd = !!settings && adsRemaining > 0 && !isWatching && !settingsLoading;
 
   return (
     <View style={styles.screenContainer}>
@@ -180,7 +201,8 @@ export default function EarnCreditsScreen() {
         <View style={styles.infoCard}>
           <Feather name="info" size={20} color={Colors.light.accent} />
           <Text style={styles.infoText}>
-            In Expo Go, ads are simulated. Real video ads will appear in the production app after deployment.
+            In Expo Go, a short wait stands in for the video; install a development or store build to see real
+            rewarded ads from Google Mobile Ads. Production ad unit IDs can be configured in app.json.
           </Text>
         </View>
 

@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import * as Haptics from "expo-haptics";
-import { useKeepAwake } from "expo-keep-awake";
+import { useKeepAwake, deactivateKeepAwake } from "expo-keep-awake";
 import { readAsStringAsync, EncodingType } from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import ReAnimated, {
@@ -26,7 +26,9 @@ import { Spacing, BorderRadius } from "@/constants/theme";
 import { ThemedText } from "@/components/ThemedText";
 import { Button } from "@/components/Button";
 import { ComicBackground } from "@/components/ComicBackground";
-import { getApiUrl, triggerHistoryRefresh } from "@/lib/query-client";
+import { getApiUrl } from "@/lib/query-client";
+import { triggerHistoryRefresh } from "@/store";
+import { fetchComicPagesForPreview } from "@/lib/comicPreviewUrls";
 import { compressComicPages } from "@/lib/imageCompression";
 import type { RootStackParamList } from "@/navigation/RootStackNavigator";
 
@@ -250,6 +252,7 @@ const LOADING_MESSAGES = [
   "Packaging your comic...",
 ];
 
+const GENERATION_KEEP_AWAKE_TAG = "comic-generation-active";
 const POLL_INTERVAL = 5000; // Poll every 5 seconds
 const FETCH_TIMEOUT = 90000; // 90 second timeout per poll (backend responds fast now with lightweight payloads)
 const MAX_RETRIES = 360; // Retry up to 360 times (30 minutes of polling tolerance for long generations)
@@ -261,8 +264,13 @@ export default function GeneratingScreen() {
   const { theme } = useTheme();
   const { token } = useAuth();
   
-  // Keep screen awake during generation to prevent connection interruptions
-  useKeepAwake();
+  // Keep screen awake during generation; use explicit tag so we always release on unmount.
+  useKeepAwake(GENERATION_KEEP_AWAKE_TAG);
+  useEffect(() => {
+    return () => {
+      deactivateKeepAwake(GENERATION_KEEP_AWAKE_TAG).catch(() => {});
+    };
+  }, []);
 
   const [progress, setProgress] = useState(0);
   const [messageIndex, setMessageIndex] = useState(0);
@@ -493,10 +501,13 @@ export default function GeneratingScreen() {
         await AsyncStorage.removeItem("current_job_id");
 
         const comicTitle = job.title || route.params.title || "My Comic";
-        
+
         // Check if server already auto-saved this comic
         const serverSaved = job.savedToLibrary === true;
         console.log(`Comic completion - server saved: ${serverSaved}`);
+
+        let comicIdForPreviewUrls: number | undefined =
+          typeof job.libraryComicId === "number" ? job.libraryComicId : undefined;
 
         // Only client-side save if server didn't already save (fallback)
         if (token && !serverSaved) {
@@ -530,6 +541,14 @@ export default function GeneratingScreen() {
 
             if (saveResponse.ok) {
               console.log("Comic auto-saved to history via client");
+              try {
+                const body = await saveResponse.json();
+                if (typeof body.comic?.id === "number") {
+                  comicIdForPreviewUrls = body.comic.id;
+                }
+              } catch {
+                /* ignore malformed JSON */
+              }
             } else {
               console.error("Failed to auto-save comic:", await saveResponse.text());
             }
@@ -538,14 +557,35 @@ export default function GeneratingScreen() {
           }
         }
 
+        let pagesForPreview = job.pages;
+        if (token && comicIdForPreviewUrls != null) {
+          const urlPages = await fetchComicPagesForPreview(String(comicIdForPreviewUrls), token);
+          if (urlPages && urlPages.length > 0) {
+            // Keep generation mode / type / copy from the job if metadata is missing (avoids wrong Preview branch for page 0).
+            pagesForPreview = urlPages.map((p, i) => {
+              const idx = p.serverPageIndex ?? i;
+              const j = job.pages[idx] as any;
+              if (!j) return p;
+              return {
+                ...p,
+                generationMode: p.generationMode ?? j.generationMode,
+                pageType: p.pageType ?? j.pageType,
+                scenes: p.scenes ?? j.scenes,
+                panels: p.panels ?? j.panels,
+              };
+            });
+            console.log("Preview will use API image URLs (reduced memory vs inline images)");
+          }
+        }
+
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-        // Trigger history refresh so History tab shows the new comic
-        triggerHistoryRefresh();
+        // Refresh history in the background so the History tab stays up to date
+        triggerHistoryRefresh(token);
 
         // Navigate to preview - comic is already saved (either by server or client)
         navigation.replace("Preview", {
-          pages: job.pages,
+          pages: pagesForPreview,
           isReadOnly: false,
           alreadySaved: true,
           title: comicTitle,

@@ -1,51 +1,115 @@
+import { getExpoGoProjectConfig } from "expo";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { Platform } from "react-native";
+
+/** Must match the server default in `server/index.ts` (PORT or 5001). */
+const DEFAULT_DEV_API_PORT = "5001";
+
+function normalizeApiBaseUrl(raw: string): string {
+  const url = new URL(raw.trim());
+  return url.href.endsWith("/") ? url.href : `${url.href}/`;
+}
+
+function isLikelyLocalDevHost(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "10.0.2.2" ||
+    /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+    /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)
+  );
+}
 
 /**
- * Gets the base URL for the Express API server (e.g., "http://localhost:3000")
- * @returns {string} The API base URL
+ * `EXPO_PUBLIC_API_URL` often uses `http://127.0.0.1:5001` for simulators, but on a
+ * physical device or Android emulator, loopback is the device itself. Prefer Metro's
+ * `debuggerHost` (same machine as the bundler), else Android emulator → `10.0.2.2`.
+ */
+function rewriteLoopbackForNativeIfNeeded(urlString: string): string {
+  if (Platform.OS === "web") {
+    return urlString;
+  }
+  let url: URL;
+  try {
+    url = new URL(urlString.trim());
+  } catch {
+    return urlString;
+  }
+  if (url.hostname !== "127.0.0.1" && url.hostname !== "localhost") {
+    return urlString;
+  }
+  const port = url.port || DEFAULT_DEV_API_PORT;
+  const debuggerHost = getExpoGoProjectConfig()?.debuggerHost;
+  if (debuggerHost) {
+    const devHost = debuggerHost.split(":")[0] ?? "";
+    if (
+      devHost &&
+      devHost !== "127.0.0.1" &&
+      devHost !== "localhost" &&
+      isLikelyLocalDevHost(devHost)
+    ) {
+      return normalizeApiBaseUrl(`http://${devHost}:${port}/`);
+    }
+  }
+  if (Platform.OS === "android") {
+    return normalizeApiBaseUrl(`http://10.0.2.2:${port}/`);
+  }
+  return urlString;
+}
+
+/**
+ * Base URL for API `fetch` calls.
+ *
+ * Prefer `EXPO_PUBLIC_API_URL` in `.env` (inlined by Expo). Example:
+ * `https://aistorizapi.fiocreatives.com/`
+ *
+ * If unset, uses dev heuristics (web: localhost / Replit; native: Expo Go host or emulator).
  */
 export function getApiUrl(): string {
-  // On web, we need to determine the correct API URL
-  if (typeof window !== 'undefined' && window.location) {
+  const configured = process.env.EXPO_PUBLIC_API_URL?.trim();
+  if (configured) {
+    try {
+      const base = rewriteLoopbackForNativeIfNeeded(
+        normalizeApiBaseUrl(configured),
+      );
+      return base;
+    } catch {
+      console.warn(
+        "[getApiUrl] Invalid EXPO_PUBLIC_API_URL; falling back to dev defaults.",
+      );
+    }
+  }
+
+  if (typeof window !== "undefined" && window.location) {
     const hostname = window.location.hostname;
     const protocol = window.location.protocol;
     const currentPort = window.location.port;
-    
-    // If already on port 5000, use same origin (correct server)
-    if (currentPort === '5000') {
-      return window.location.origin + '/';
+
+    if (currentPort === "5000") {
+      return `${window.location.origin}/`;
     }
-    
-    // On Replit dev domains not on port 5000, use port 5000
-    // External port 5000 maps to Express server directly
-    if (hostname.includes('.replit.dev') || hostname.includes('.repl.co')) {
+
+    if (hostname.includes(".replit.") || hostname.includes(".repl.co")) {
       return `${protocol}//${hostname}:5000/`;
     }
-    
-    // For localhost development, always use port 5000
-    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+
+    if (hostname === "localhost" || hostname === "127.0.0.1") {
       return `${protocol}//${hostname}:5000/`;
     }
-    
-    // For production (deployed), use same origin (Express serves everything)
-    return window.location.origin + '/';
-  }
-  
-  // For native apps, use the configured domain with port 5000
-  let host = process.env.EXPO_PUBLIC_DOMAIN;
 
-  if (!host) {
-    throw new Error("EXPO_PUBLIC_DOMAIN is not set");
+    return `${window.location.origin}/`;
   }
 
-  // Ensure port 5000 is used for native apps
-  if (!host.includes(':')) {
-    host = host + ':5000';
-  }
-  
-  let url = new URL(`https://${host}`);
+  const debuggerHost = getExpoGoProjectConfig()?.debuggerHost;
+  const hostWithPort = debuggerHost
+    ? `${debuggerHost.split(":")[0]}:${DEFAULT_DEV_API_PORT}`
+    : Platform.OS === "android"
+      ? `10.0.2.2:${DEFAULT_DEV_API_PORT}`
+      : `localhost:${DEFAULT_DEV_API_PORT}`;
 
-  return url.href;
+  const hostPart = hostWithPort.split(":")[0] ?? "";
+  const proto = isLikelyLocalDevHost(hostPart) ? "http:" : "https:";
+  return `${proto}//${hostWithPort}/`;
 }
 
 async function throwIfResNotOk(res: Response) {
@@ -109,18 +173,3 @@ export const queryClient = new QueryClient({
     },
   },
 });
-
-// Simple event emitter for history refresh
-type HistoryRefreshListener = () => void;
-const historyRefreshListeners: Set<HistoryRefreshListener> = new Set();
-
-export function onHistoryRefresh(listener: HistoryRefreshListener): () => void {
-  historyRefreshListeners.add(listener);
-  return () => {
-    historyRefreshListeners.delete(listener);
-  };
-}
-
-export function triggerHistoryRefresh(): void {
-  historyRefreshListeners.forEach((listener) => listener());
-}

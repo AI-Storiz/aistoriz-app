@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -7,33 +7,28 @@ import {
   Image,
   Dimensions,
   Pressable,
+  Platform,
+  ActivityIndicator,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { Feather } from "@expo/vector-icons";
-import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
+import LottieView from "lottie-react-native";
+import Animated, { FadeIn } from "react-native-reanimated";
 
 import { useAuth } from "@/contexts/AuthContext";
-import { getApiUrl, onHistoryRefresh } from "@/lib/query-client";
+import { fetchComicPagesForPreview } from "@/lib/comicPreviewUrls";
+import { store, fetchHistory, clearHistory } from "@/store";
+import { useAppDispatch, useAppSelector } from "@/store/hooks";
+import type { SavedComicLightweight } from "@/store/historySlice";
 import { ComicCard } from "@/components/ComicCard";
-import { Button } from "@/components/Button";
 import FooterTextAd from "@/components/FooterTextAd";
 import BannerAd from "@/components/BannerAd";
 import type { RootStackParamList } from "@/navigation/RootStackNavigator";
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
-
-interface SavedComicLightweight {
-  id: string;
-  title: string;
-  createdAt: string;
-  style: string;
-  characterNames: string[];
-  pagesCount?: number;
-  thumbnailUrl?: string | null;
-}
 
 const COLORS = {
   bg: "#E5E7EB",
@@ -46,69 +41,34 @@ const COLORS = {
 const { width } = Dimensions.get("window");
 const CARD_WIDTH = (width - 60) / 2;
 
+const HISTORY_LOADER_ANIMATION = require("../../assets/animations/comic-loader.json");
+
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
   const navigation = useNavigation<NavigationProp>();
   const { user, token } = useAuth();
+  const dispatch = useAppDispatch();
 
-  const [comics, setComics] = useState<SavedComicLightweight[]>([]);
-  const [loading, setLoading] = useState(true);
+  const comics = useAppSelector((s) => s.history.comics);
+  const fullInFlight = useAppSelector((s) => s.history.fullInFlight);
+  const silentInFlight = useAppSelector((s) => s.history.silentInFlight);
+
+  const showFullLoader = fullInFlight > 0 && comics.length === 0;
+  const backgroundRefreshing = silentInFlight > 0;
+
   const [loadingComicId, setLoadingComicId] = useState<string | null>(null);
 
   useFocusEffect(
     useCallback(() => {
-      loadComics();
-    }, [user?.id, token])
-  );
-
-  // Listen for refresh events when comics are saved
-  useEffect(() => {
-    const unsubscribe = onHistoryRefresh(() => {
-      console.log("History refresh triggered");
-      loadComics();
-    });
-    return unsubscribe;
-  }, [token]);
-
-  const loadComics = async () => {
-    if (!token) {
-      setComics([]);
-      setLoading(false);
-      return;
-    }
-    
-    setLoading(true);
-    try {
-      const response = await fetch(new URL("/api/comics", getApiUrl()).toString(), {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      
-      if (response.ok) {
-        const { comics: apiComics } = await response.json();
-        const apiBase = getApiUrl();
-        const mappedComics: SavedComicLightweight[] = apiComics.map((c: any) => ({
-          id: c.id.toString(),
-          title: c.title,
-          createdAt: c.createdAt,
-          style: c.style || '',
-          characterNames: c.characterNames || [],
-          pagesCount: c.pagesCount || 0,
-          thumbnailUrl: `${apiBase}/api/comics/${c.id}/page/0/panel/-1/image?token=${token}`,
-        }));
-        setComics(mappedComics);
-      } else {
-        setComics([]);
+      if (!token) {
+        dispatch(clearHistory());
+        return;
       }
-    } catch (error) {
-      console.error("Error loading comics:", error);
-      setComics([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+      const mode = store.getState().history.comics.length > 0 ? "silent" : "full";
+      void dispatch(fetchHistory({ token, mode }));
+    }, [token, dispatch])
+  );
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -119,102 +79,103 @@ export default function HistoryScreen() {
     });
   };
 
-  const handleComicPress = async (comic: SavedComicLightweight) => {
-    if (!token || loadingComicId) return;
-    
-    setLoadingComicId(comic.id);
-    try {
-      const response = await fetch(
-        new URL(`/api/comics/${comic.id}`, getApiUrl()).toString(),
-        {
-          headers: { Authorization: `Bearer ${token}` },
+  const handleComicPress = useCallback(
+    async (comic: SavedComicLightweight) => {
+      if (!token || loadingComicId) return;
+
+      setLoadingComicId(comic.id);
+      try {
+        const pagesWithUrls = await fetchComicPagesForPreview(comic.id, token);
+        if (pagesWithUrls && pagesWithUrls.length > 0) {
+          navigation.navigate("Preview", {
+            pages: pagesWithUrls,
+            isReadOnly: true,
+            title: comic.title,
+          });
         }
-      );
-      
-      if (response.ok) {
-        const { comic: fullComic } = await response.json();
-        const apiBase = getApiUrl();
-        const pagesWithUrls = (fullComic.pages || []).map((page: any) => {
-          const pageIdx = page._pageIndex ?? 0;
-          const panelImages = Array.from({ length: page.panelCount || 0 }, (_, panelIdx) =>
-            `${apiBase}/api/comics/${fullComic.id}/page/${pageIdx}/panel/${panelIdx}/image?token=${token}`
-          );
-          const imageUrl = page.hasImageUrl
-            ? `${apiBase}/api/comics/${fullComic.id}/page/${pageIdx}/panel/-1/image?token=${token}`
-            : (panelImages.length > 0 ? panelImages[0] : "");
-          return {
-            pageNumber: page.pageNumber,
-            imageUrl,
-            scenes: page.scenes,
-            panelImages,
-            panels: page.panels,
-            pageType: page.pageType,
-            generationMode: page.generationMode,
-          };
-        });
-        
-        navigation.navigate("Preview", {
-          pages: pagesWithUrls,
-          isReadOnly: true,
-          title: fullComic.title,
-        });
+      } catch (error) {
+        console.error("Error loading comic:", error);
+      } finally {
+        setLoadingComicId(null);
       }
-    } catch (error) {
-      console.error("Error loading comic:", error);
-    } finally {
-      setLoadingComicId(null);
-    }
-  };
-
-  const renderEmpty = () => (
-    <View style={styles.emptyContainer}>
-      <Image
-        source={require("../../assets/images/empty-history.png")}
-        style={styles.emptyImage}
-        resizeMode="contain"
-      />
-      <Text style={styles.emptyTitle}>No Comics Yet</Text>
-      <Text style={styles.emptySubtitle}>
-        Start creating your first comic story!
-      </Text>
-      <Pressable
-        style={styles.emptyButton}
-        onPress={() => navigation.getParent()?.navigate("CreateTab")}
-        testID="button-start-creating"
-      >
-        <Text style={styles.emptyButtonText}>Start Creating</Text>
-      </Pressable>
-    </View>
+    },
+    [token, loadingComicId, navigation]
   );
 
-  const renderItem = ({ item, index }: { item: SavedComicLightweight; index: number }) => {
-    const isLoadingThis = loadingComicId === item.id;
-    
-    return (
-      <ComicCard
-        title={item.title}
-        imageUrl={item.thumbnailUrl || undefined}
-        date={formatDate(item.createdAt)}
-        onPress={() => handleComicPress(item)}
-        style={[
-          styles.card,
-          { width: CARD_WIDTH, opacity: isLoadingThis ? 0.6 : 1 },
-          index % 2 === 0 ? { marginRight: 10 } : { marginLeft: 10 },
-        ]}
-        testID={`comic-card-${item.id}`}
-      />
-    );
-  };
-
-  const renderHeader = () => (
-    <>
-      <Animated.View entering={FadeIn.duration(200)}>
-        <Text style={styles.bigTitle}>Your</Text>
-        <Text style={styles.bigTitleAccent}>creations</Text>
-      </Animated.View>
-      {comics.length > 0 ? <BannerAd /> : null}
-    </>
+  const renderEmpty = useCallback(
+    () => (
+      <View style={styles.emptyContainer}>
+        <Image
+          source={require("../../assets/images/empty-history.png")}
+          style={styles.emptyImage}
+          resizeMode="contain"
+        />
+        <Text style={styles.emptyTitle}>No Comics Yet</Text>
+        <Text style={styles.emptySubtitle}>
+          Start creating your first comic story!
+        </Text>
+        <Pressable
+          style={styles.emptyButton}
+          onPress={() => navigation.getParent()?.navigate("CreateTab")}
+          testID="button-start-creating"
+        >
+          <Text style={styles.emptyButtonText}>Start Creating</Text>
+        </Pressable>
+      </View>
+    ),
+    [navigation]
   );
+
+  const renderItem = useCallback(
+    ({ item, index }: { item: SavedComicLightweight; index: number }) => {
+      const isLoadingThis = loadingComicId === item.id;
+
+      return (
+        <ComicCard
+          title={item.title}
+          imageUrl={item.thumbnailUrl || undefined}
+          date={formatDate(item.createdAt)}
+          onPress={() => handleComicPress(item)}
+          style={[
+            styles.card,
+            { width: CARD_WIDTH, opacity: isLoadingThis ? 0.6 : 1 },
+            index % 2 === 0 ? { marginRight: 10 } : { marginLeft: 10 },
+          ]}
+          testID={`comic-card-${item.id}`}
+        />
+      );
+    },
+    [loadingComicId, handleComicPress]
+  );
+
+  const renderHeader = useMemo(
+    () => (
+      <>
+        <Animated.View entering={FadeIn.duration(200)}>
+          <View style={styles.titleRow}>
+            <View>
+              <Text style={styles.bigTitle}>Your</Text>
+              <Text style={styles.bigTitleAccent}>creations</Text>
+            </View>
+            {backgroundRefreshing ? (
+              <View
+                style={styles.refreshPill}
+                accessibilityLabel="Updating your library"
+                testID="history-background-refresh"
+              >
+                <ActivityIndicator size="small" color={COLORS.accent} />
+                <Text style={styles.refreshPillText}>Updating</Text>
+              </View>
+            ) : null}
+          </View>
+        </Animated.View>
+        {comics.length > 0 ? <BannerAd /> : null}
+      </>
+    ),
+    [comics.length, backgroundRefreshing]
+  );
+
+  const keyExtractor = useCallback((item: SavedComicLightweight) => item.id, []);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -234,22 +195,45 @@ export default function HistoryScreen() {
         </Pressable>
       </View>
 
-      <FlatList
-        data={comics}
-        renderItem={renderItem}
-        keyExtractor={(item) => item.id}
-        numColumns={2}
-        contentContainerStyle={[
-          styles.listContent,
-          { paddingBottom: tabBarHeight + 20 },
-          comics.length === 0 && styles.emptyList,
-        ]}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={!loading ? renderEmpty : null}
-        ListHeaderComponent={renderHeader}
-        ListFooterComponent={comics.length > 0 ? <FooterTextAd /> : null}
-        testID="history-list"
-      />
+      <View style={styles.listArea}>
+        <FlatList
+          data={comics}
+          renderItem={renderItem}
+          keyExtractor={keyExtractor}
+          numColumns={2}
+          initialNumToRender={8}
+          maxToRenderPerBatch={8}
+          windowSize={7}
+          updateCellsBatchingPeriod={50}
+          removeClippedSubviews={Platform.OS === "android"}
+          contentContainerStyle={[
+            styles.listContent,
+            { paddingBottom: tabBarHeight + 20 },
+            comics.length === 0 && styles.emptyList,
+          ]}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={!showFullLoader ? renderEmpty : null}
+          ListHeaderComponent={renderHeader}
+          ListFooterComponent={comics.length > 0 ? <FooterTextAd /> : null}
+          testID="history-list"
+        />
+        {showFullLoader ? (
+          <Animated.View
+            entering={FadeIn.duration(280)}
+            style={styles.loadingOverlay}
+            pointerEvents="auto"
+            testID="history-loading"
+          >
+            <LottieView
+              source={HISTORY_LOADER_ANIMATION}
+              autoPlay
+              loop
+              style={styles.loadingLottie}
+            />
+            <Text style={styles.loadingLabel}>Loading your creations…</Text>
+          </Animated.View>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -293,6 +277,12 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     fontFamily: "Nunito_700Bold",
   },
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+  },
   bigTitle: {
     fontSize: 30,
     fontWeight: "700",
@@ -306,6 +296,45 @@ const styles = StyleSheet.create({
     color: COLORS.accent,
     fontFamily: "Nunito_700Bold",
     marginBottom: 20,
+  },
+  refreshPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: COLORS.card,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginTop: 8,
+  },
+  refreshPillText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: COLORS.dim,
+    fontFamily: "Nunito_600SemiBold",
+  },
+  listArea: {
+    flex: 1,
+    position: "relative",
+  },
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(229, 231, 235, 0.92)",
+    paddingHorizontal: 32,
+  },
+  loadingLottie: {
+    width: 168,
+    height: 168,
+  },
+  loadingLabel: {
+    marginTop: 8,
+    fontSize: 16,
+    fontWeight: "600",
+    color: COLORS.dim,
+    fontFamily: "Nunito_600SemiBold",
+    textAlign: "center",
   },
   listContent: {
     paddingTop: 8,

@@ -2,6 +2,8 @@ import React from "react";
 import { View, StyleSheet, Dimensions } from "react-native";
 import { Image } from "expo-image";
 import { useTheme } from "@/hooks/useTheme";
+import { useAuth } from "@/contexts/AuthContext";
+import { authedComicImageSource } from "@/lib/comicImageSource";
 import { ThemedText } from "@/components/ThemedText";
 import { Spacing, BorderRadius } from "@/constants/theme";
 import { SpeechBubble } from "./SpeechBubble";
@@ -40,6 +42,7 @@ export function ComicPanelGrid({
   title,
 }: ComicPanelGridProps) {
   const { theme } = useTheme();
+  const { token } = useAuth();
   const isCover = pageType === 'cover';
   const totalHeight = (containerWidth * 4) / 3 * 1.35;
   const contentHeight = totalHeight;
@@ -63,11 +66,12 @@ export function ComicPanelGrid({
           ) : null}
           <View style={styles.coverImageInset}>
             <Image
-              source={panels[0].imageUrl}
+              source={authedComicImageSource(panels[0].imageUrl, token)}
+              recyclingKey={panels[0].imageUrl}
               style={styles.coverImageFill}
               contentFit="cover"
               cachePolicy="disk"
-              transition={200}
+              transition={0}
             />
           </View>
         </View>
@@ -123,11 +127,12 @@ export function ComicPanelGrid({
                       {panel.imageUrl ? (
                         <View style={styles.panelImageContainer}>
                           <Image
-                            source={panel.imageUrl}
+                            source={authedComicImageSource(panel.imageUrl, token)}
+                            recyclingKey={panel.imageUrl}
                             style={styles.panelImage}
                             contentFit="cover"
                             cachePolicy="disk"
-                            transition={200}
+                            transition={0}
                           />
                         </View>
                       ) : (

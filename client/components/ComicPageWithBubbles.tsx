@@ -5,6 +5,8 @@ import { Feather } from "@expo/vector-icons";
 import { SpeechBubble, BubblePosition } from "./SpeechBubble";
 import { BorderRadius, Spacing } from "@/constants/theme";
 import { ThemedText } from "./ThemedText";
+import { useAuth } from "@/contexts/AuthContext";
+import { authedComicImageSource } from "@/lib/comicImageSource";
 
 interface PageScenes {
   description: string;
@@ -87,7 +89,9 @@ export function ComicPageWithBubbles({
   backgroundColor = "#f5f5f5",
   hideBubbles = false,
 }: ComicPageWithBubblesProps) {
+  const { token } = useAuth();
   const dialogue = scenes?.dialogue || "";
+  const resolvedSource = imageUrl?.trim() ? authedComicImageSource(imageUrl, token) : null;
 
   const dialoguePosition = determineBubblePlacement(pageNumber);
 
@@ -106,14 +110,15 @@ export function ComicPageWithBubbles({
           </View>
         ) : null}
         <View style={[styles.imageContainer, { backgroundColor, height: (isCover && title && !hideBubbles) ? undefined : imageHeight, flex: (isCover && title && !hideBubbles) ? 1 : undefined }]}>
-          {imageUrl ? (
+          {resolvedSource ? (
             <View style={hideBubbles ? styles.imageInsetFull : styles.imageInset}>
               <Image
-                source={imageUrl}
+                source={resolvedSource}
+                recyclingKey={imageUrl}
                 style={styles.image}
                 contentFit={hideBubbles ? "fill" : "cover"}
                 cachePolicy="disk"
-                transition={200}
+                transition={hideBubbles ? 0 : 200}
               />
             </View>
           ) : (

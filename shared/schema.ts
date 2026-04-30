@@ -11,7 +11,7 @@ export const users = pgTable("users", {
   email: text("email").notNull().unique(),
   password: text("password").notNull(),
   userId: text("user_id").notNull().unique(),
-  credits: integer("credits").default(0).notNull(),
+  credits: integer("credits").default(20).notNull(),
   subscriptionStatus: text("subscription_status").default("none").notNull(),
   subscriptionPlan: text("subscription_plan"),
   subscriptionExpiresAt: timestamp("subscription_expires_at"),
@@ -40,12 +40,12 @@ export const creditTransactions = pgTable("credit_transactions", {
 
 export const creditSettings = pgTable("credit_settings", {
   id: serial("id").primaryKey(),
-  baseCost: integer("base_cost").default(50).notNull(),
+  baseCost: integer("base_cost").default(20).notNull(),
   costPerPage: integer("cost_per_page").default(15).notNull(),
   adsCreditsReward: integer("ads_credits_reward").default(25).notNull(),
   maxAdsPerDay: integer("max_ads_per_day").default(5).notNull(),
-  weeklyPlanCredits: integer("weekly_plan_credits").default(300).notNull(),
-  weeklyPlanPrice: text("weekly_plan_price").default("6.99").notNull(),
+  weeklyPlanCredits: integer("weekly_plan_credits").default(270).notNull(),
+  weeklyPlanPrice: text("weekly_plan_price").default("7.02").notNull(),
   yearlyPlanCredits: integer("yearly_plan_credits").default(3000).notNull(),
   yearlyPlanPrice: text("yearly_plan_price").default("69.00").notNull(),
   topUp1Credits: integer("top_up_1_credits").default(100).notNull(),
@@ -112,6 +112,8 @@ export const comicJobs = pgTable("comic_jobs", {
   pagesCount: integer("pages_count"),
   pages: jsonb("pages").default([]).notNull(),
   error: text("error"),
+  /** Set when the finished job was persisted to `user_comics` so clients can open Preview with API image URLs. */
+  libraryComicId: integer("library_comic_id"),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });

@@ -1,15 +1,15 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   View,
-  ScrollView,
+  FlatList,
   StyleSheet,
   Image,
   Pressable,
   Alert,
   Dimensions,
-  Platform,
   Modal,
   ActivityIndicator,
+  type ListRenderItemInfo,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
@@ -30,7 +30,7 @@ import { ComicBackground } from "@/components/ComicBackground";
 import { ComicPageWithBubbles } from "@/components/ComicPageWithBubbles";
 import { ComicPanelGrid } from "@/components/ComicPanelGrid";
 import { EditDialogueModal } from "@/components/EditDialogueModal";
-import { shareSingleJPG, sharePDF, shareZIP, downloadToDevice, ComicPage } from "@/lib/exportService";
+import { shareComicPageJPG, sharePDF, shareZIP, downloadToDevice, ComicPage } from "@/lib/exportService";
 import type { RootStackParamList } from "@/navigation/RootStackNavigator";
 
 type RouteType = RouteProp<RootStackParamList, "Preview">;
@@ -121,13 +121,17 @@ export default function PreviewScreen() {
     }
   };
 
-  const typedPages: ComicPage[] = pages.map((p) => ({
-    pageNumber: p.pageNumber,
-    imageUrl: p.imageUrl,
-    panelImages: p.panelImages,
-    pageType: p.pageType,
-    scenes: p.scenes,
-  }));
+  const typedPages: ComicPage[] = useMemo(
+    () =>
+      pages.map((p) => ({
+        pageNumber: p.pageNumber,
+        imageUrl: p.imageUrl,
+        panelImages: p.panelImages,
+        pageType: p.pageType,
+        scenes: p.scenes,
+      })),
+    [pages]
+  );
 
   const handleGoBack = async () => {
     await AsyncStorage.setItem("clearCharacterSelection", "true");
@@ -153,7 +157,7 @@ export default function PreviewScreen() {
         </HeaderButton>
       ),
     });
-  }, [navigation, pages, title, isReadOnly]);
+  }, [navigation, title, isReadOnly, theme.text, theme.primary, theme.textSecondary]);
 
   const handleOpenShareModal = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -301,29 +305,27 @@ export default function PreviewScreen() {
     Alert.alert("Export Error", message);
   };
 
-  const handleSharePage = async (page: ComicPage) => {
+  const handleSharePage = useCallback(async (page: ComicPage) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    
-    // For multi-panel pages, use the first panel image; for single pages use imageUrl
-    const imageToShare = page.panelImages && page.panelImages.length > 0 
-      ? page.panelImages[0] 
-      : page.imageUrl;
-    
-    if (!imageToShare) {
+
+    const hasAny =
+      (page.imageUrl || "").trim().length > 0 ||
+      (page.panelImages && page.panelImages.some((u) => (u || "").trim().length > 0));
+    if (!hasAny) {
       Alert.alert("Share Error", "No image available to share.");
       return;
     }
-    
-    const result = await shareSingleJPG(imageToShare, page.pageNumber);
+
+    const result = await shareComicPageJPG(page);
     if (!result.success) {
       Alert.alert("Share Error", result.message);
     }
-  };
+  }, []);
 
-  const handleEditPage = (index: number) => {
+  const handleEditPage = useCallback((index: number) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setEditingPageIndex(index);
-  };
+  }, []);
 
   const handleSaveEdit = (updatedScenes: { description: string; dialogue: string }) => {
     if (editingPageIndex === null) return;
@@ -343,123 +345,163 @@ export default function PreviewScreen() {
   const editingPage = editingPageIndex !== null ? pages[editingPageIndex] : null;
   const PAGE_HEIGHT = (PAGE_WIDTH * 4) / 3 * 1.35;
 
+  const listHeader = useMemo(() => {
+    if (!isReadOnly || !title) return null;
+    return (
+      <View style={[styles.titleCard, { backgroundColor: theme.backgroundSecondary }]}>
+        <ThemedText style={[styles.titleText, { color: theme.text }]}>{title}</ThemedText>
+      </View>
+    );
+  }, [isReadOnly, title, theme.backgroundSecondary, theme.text]);
+
+  const listEmpty = useMemo(
+    () => (
+      <View style={styles.emptyState}>
+        <Feather name="book-open" size={64} color={theme.placeholder} />
+        <ThemedText type="body" style={{ color: theme.textSecondary, marginTop: Spacing.lg }}>
+          No pages to display
+        </ThemedText>
+      </View>
+    ),
+    [theme.placeholder, theme.textSecondary]
+  );
+
+  const renderComicPage = useCallback(
+    ({ item: page, index }: ListRenderItemInfo<ExtendedComicPage>) => (
+      <View
+        style={[
+          styles.pageCard,
+          { backgroundColor: theme.backgroundDefault, borderColor: theme.border },
+          Shadows.card,
+        ]}
+      >
+        <View style={styles.pageHeader}>
+          <ThemedText type="h4">
+            {page.pageType === "cover"
+              ? "Cover"
+              : page.pageType === "conclusion"
+                ? "Conclusion"
+                : `Page ${page.pageNumber}`}
+          </ThemedText>
+          <View style={styles.headerActions}>
+            {!isReadOnly ? (
+              <Pressable
+                onPress={() => handleEditPage(index)}
+                hitSlop={8}
+                style={({ pressed }) => [styles.headerButton, { opacity: pressed ? 0.7 : 1 }]}
+                testID={`button-edit-text-${page.pageNumber}`}
+              >
+                <Feather name="edit-2" size={16} color={theme.textSecondary} />
+              </Pressable>
+            ) : null}
+            <Pressable
+              onPress={() => handleSharePage(typedPages[index])}
+              hitSlop={12}
+              style={({ pressed }) => [
+                styles.headerButton,
+                {
+                  opacity: pressed ? 0.7 : 1,
+                  backgroundColor: pressed ? theme.backgroundSecondary : "transparent",
+                  borderRadius: 22,
+                },
+              ]}
+              testID={`button-share-page-${page.pageNumber}`}
+            >
+              <Feather name="share" size={20} color={theme.primary} />
+            </Pressable>
+          </View>
+        </View>
+        {page.generationMode === "gemini-fullpage" && page.imageUrl ? (
+          <ComicPageWithBubbles
+            imageUrl={page.imageUrl}
+            scenes={page.scenes}
+            containerWidth={PAGE_WIDTH}
+            containerHeight={PAGE_WIDTH * 16 / 9}
+            pageNumber={page.pageNumber}
+            isCover={page.pageType === "cover"}
+            title={page.pageType === "cover" ? title : undefined}
+            borderColor={theme.border}
+            backgroundColor={theme.backgroundSecondary}
+            hideBubbles={true}
+          />
+        ) : page.panelImages && page.panelImages.length > 1 ? (
+          <ComicPanelGrid
+            panels={page.panelImages
+              .map((img: string, idx: number) => ({
+                imageUrl: img,
+                dialogue: page.panels?.[idx]?.dialogue || "",
+                description: page.panels?.[idx]?.description || "",
+              }))
+              .filter((p) => p.imageUrl)}
+            containerWidth={PAGE_WIDTH}
+            pageType={page.pageType}
+            title={page.pageType === "cover" ? title : undefined}
+          />
+        ) : page.imageUrl ? (
+          <ComicPageWithBubbles
+            imageUrl={page.imageUrl}
+            scenes={page.scenes}
+            containerWidth={PAGE_WIDTH}
+            containerHeight={PAGE_HEIGHT}
+            pageNumber={page.pageNumber}
+            isCover={page.pageType === "cover"}
+            title={page.pageType === "cover" ? title : undefined}
+            borderColor={theme.border}
+            backgroundColor={theme.backgroundSecondary}
+          />
+        ) : (
+          <View
+            style={[styles.placeholderPage, { backgroundColor: theme.backgroundSecondary }]}
+          >
+            <Feather name="image" size={48} color={theme.placeholder} />
+            <ThemedText type="small" style={{ color: theme.placeholder, marginTop: Spacing.md }}>
+              Image not available
+            </ThemedText>
+          </View>
+        )}
+      </View>
+    ),
+    [
+      PAGE_HEIGHT,
+      isReadOnly,
+      theme.backgroundDefault,
+      theme.border,
+      theme.backgroundSecondary,
+      theme.placeholder,
+      theme.primary,
+      theme.textSecondary,
+      title,
+      typedPages,
+      handleEditPage,
+      handleSharePage,
+    ]
+  );
+
+  const listFooter = useMemo(
+    () => <View style={{ height: isReadOnly ? Spacing.xl : 120 }} />,
+    [isReadOnly]
+  );
+
   return (
     <ComicBackground>
-      <ScrollView
+      <FlatList
+        data={pages}
+        keyExtractor={(item, i) => `page-${item.pageNumber}-${i}`}
+        renderItem={renderComicPage}
+        ListHeaderComponent={listHeader}
+        ListEmptyComponent={listEmpty}
+        ListFooterComponent={listFooter}
         contentContainerStyle={[
           styles.scrollContent,
           { paddingBottom: insets.bottom + (isReadOnly ? Spacing.xl : 120) },
         ]}
         showsVerticalScrollIndicator={false}
-      >
-        {isReadOnly && title ? (
-          <View style={[styles.titleCard, { backgroundColor: theme.backgroundSecondary }]}>
-            <ThemedText style={[styles.titleText, { color: theme.text }]}>
-              {title}
-            </ThemedText>
-          </View>
-        ) : null}
-        {pages.length > 0 ? (
-          pages.map((page, index) => (
-            <View
-              key={index}
-              style={[
-                styles.pageCard,
-                { backgroundColor: theme.backgroundDefault, borderColor: theme.border },
-                Shadows.card,
-              ]}
-            >
-              <View style={styles.pageHeader}>
-                <ThemedText type="h4">
-                  {page.pageType === 'cover' ? 'Cover' : page.pageType === 'conclusion' ? 'Conclusion' : `Page ${page.pageNumber}`}
-                </ThemedText>
-                <View style={styles.headerActions}>
-                  {!isReadOnly ? (
-                    <Pressable
-                      onPress={() => handleEditPage(index)}
-                      hitSlop={8}
-                      style={({ pressed }) => [styles.headerButton, { opacity: pressed ? 0.7 : 1 }]}
-                      testID={`button-edit-text-${page.pageNumber}`}
-                    >
-                      <Feather name="edit-2" size={16} color={theme.textSecondary} />
-                    </Pressable>
-                  ) : null}
-                  <Pressable
-                    onPress={() => handleSharePage(typedPages[index])}
-                    hitSlop={12}
-                    style={({ pressed }) => [styles.headerButton, { opacity: pressed ? 0.7 : 1, backgroundColor: pressed ? theme.backgroundSecondary : 'transparent', borderRadius: 22 }]}
-                    testID={`button-share-page-${page.pageNumber}`}
-                  >
-                    <Feather name="share" size={20} color={theme.primary} />
-                  </Pressable>
-                </View>
-              </View>
-              {page.generationMode === 'gemini-fullpage' && page.imageUrl ? (
-                <ComicPageWithBubbles
-                  imageUrl={page.imageUrl}
-                  scenes={page.scenes}
-                  containerWidth={PAGE_WIDTH}
-                  containerHeight={PAGE_WIDTH * 16 / 9}
-                  pageNumber={page.pageNumber}
-                  isCover={page.pageType === 'cover'}
-                  title={page.pageType === 'cover' ? title : undefined}
-                  borderColor={theme.border}
-                  backgroundColor={theme.backgroundSecondary}
-                  hideBubbles={true}
-                />
-              ) : page.panelImages && page.panelImages.length > 1 ? (
-                <ComicPanelGrid
-                  panels={page.panelImages.map((img: string, idx: number) => ({
-                    imageUrl: img,
-                    dialogue: page.panels?.[idx]?.dialogue || '',
-                    description: page.panels?.[idx]?.description || '',
-                  })).filter(p => p.imageUrl)}
-                  containerWidth={PAGE_WIDTH}
-                  pageType={page.pageType}
-                  title={page.pageType === 'cover' ? title : undefined}
-                />
-              ) : page.imageUrl ? (
-                <ComicPageWithBubbles
-                  imageUrl={page.imageUrl}
-                  scenes={page.scenes}
-                  containerWidth={PAGE_WIDTH}
-                  containerHeight={PAGE_HEIGHT}
-                  pageNumber={page.pageNumber}
-                  isCover={page.pageType === 'cover'}
-                  title={page.pageType === 'cover' ? title : undefined}
-                  borderColor={theme.border}
-                  backgroundColor={theme.backgroundSecondary}
-                />
-              ) : (
-                <View
-                  style={[
-                    styles.placeholderPage,
-                    { backgroundColor: theme.backgroundSecondary },
-                  ]}
-                >
-                  <Feather name="image" size={48} color={theme.placeholder} />
-                  <ThemedText
-                    type="small"
-                    style={{ color: theme.placeholder, marginTop: Spacing.md }}
-                  >
-                    Image not available
-                  </ThemedText>
-                </View>
-              )}
-            </View>
-          ))
-        ) : (
-          <View style={styles.emptyState}>
-            <Feather name="book-open" size={64} color={theme.placeholder} />
-            <ThemedText
-              type="body"
-              style={{ color: theme.textSecondary, marginTop: Spacing.lg }}
-            >
-              No pages to display
-            </ThemedText>
-          </View>
-        )}
-      </ScrollView>
+        // Clipping the first item can leave images blank on some Android devices with expo-image.
+        removeClippedSubviews={false}
+        initialNumToRender={2}
+        maxToRenderPerBatch={2}
+        windowSize={5}
+      />
 
       {!isReadOnly && pages.length > 0 ? (
         <View

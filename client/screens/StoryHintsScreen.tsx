@@ -230,9 +230,9 @@ export default function StoryHintsScreen() {
           <SectionNote text="5 pages is the sweet spot for most stories. It gives the AI enough room to build tension and deliver a satisfying ending." />
 
           <Text style={styles.subHeading}>Credits Cost</Text>
-          <Tip text="Base cost: 50 credits for the first page" />
+          <Tip text="Base cost: 20 credits for the first page" />
           <Tip text="Each additional page: +15 credits" />
-          <Tip text="Example: A 5-page comic costs 50 + (4 x 15) = 110 credits" />
+          <Tip text="Example: A 5-page comic costs 20 + (4 × 15) = 80 credits" />
         </HintSection>
 
         <HintSection
@@ -279,8 +279,8 @@ export default function StoryHintsScreen() {
           <Text style={styles.bodyText}>
             Credits are the currency used to generate comics. Here's how they work.
           </Text>
-          <Tip text="New accounts start with 50 free credits" />
-          <Tip text="Each comic costs credits based on page count (50 base + 15 per extra page)" />
+          <Tip text="New accounts start with 20 free credits" />
+          <Tip text="Each comic costs credits based on page count (20 credits for the first page + 15 per additional page)" />
           <Tip text="Watch rewarded video ads to earn free credits" />
           <Tip text="Refer friends to earn bonus credits for both of you" />
           <Tip text="Subscribe to a Weekly or Yearly plan for regular credit top-ups" />

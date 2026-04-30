@@ -1,4 +1,4 @@
-package com.aidynamiz.storiz
+package com.aistoriz.storiz
 
 import android.app.Application
 import android.content.res.Configuration
