@@ -9,6 +9,10 @@ export interface ComicPreviewPagePayload {
   panels?: Array<{ description: string; dialogue: string; cameraAngle?: string }>;
   pageType?: "cover" | "body" | "conclusion";
   generationMode?: string;
+  /** 0-based index into stored `comic.pages` / `job.pages` (for merge after generation). */
+  serverPageIndex: number;
+  /** True for the extra hero cover row (first panel of the first multi-panel page). */
+  syntheticCover?: boolean;
 }
 
 /**
@@ -27,6 +31,7 @@ export async function fetchComicPagesForPreview(
 
     const { comic: fullComic } = await response.json();
     const apiBase = getApiUrl();
+    const apiPages: any[] = fullComic.pages || [];
 
     const panelImageHref = (pageIdx: number, panelIdx: number) => {
       const u = new URL(
@@ -37,18 +42,13 @@ export async function fetchComicPagesForPreview(
       return u.toString();
     };
 
-    // 0-based index into `userComics.pages` (jsonb array); must match storage.getComicPanelImage.
-    return (fullComic.pages || []).map((page: any, index: number) => {
-      const safePageIdx = index;
-      const panelImages = Array.from({ length: page.panelCount || 0 }, (_, panelIdx) =>
-        panelImageHref(safePageIdx, panelIdx)
+    const buildPagePayload = (page: any, index: number): ComicPreviewPagePayload => {
+      const serverPageIndex = index;
+      const panelCount = page.panelCount || 0;
+      const panelImages = Array.from({ length: panelCount }, (_, panelIdx) =>
+        panelImageHref(serverPageIndex, panelIdx)
       );
-      const imageUrl = page.hasImageUrl
-        ? panelImageHref(safePageIdx, -1)
-        : panelImages.length > 0
-          ? panelImages[0]
-          : panelImageHref(safePageIdx, -1);
-
+      const imageUrl = panelImageHref(serverPageIndex, -1);
       return {
         pageNumber: page.pageNumber,
         imageUrl,
@@ -57,8 +57,41 @@ export async function fetchComicPagesForPreview(
         panels: page.panels,
         pageType: page.pageType,
         generationMode: page.generationMode,
+        serverPageIndex,
       };
-    });
+    };
+
+    const built = apiPages.map((page, index) => buildPagePayload(page, index));
+
+    const p0 = apiPages[0];
+    const hasMultiPanelFirst = p0 != null && (Number(p0.panelCount) || 0) > 1;
+
+    if (hasMultiPanelFirst) {
+      const firstPanelHref = panelImageHref(0, 0);
+      const firstPanel = Array.isArray(p0.panels) ? p0.panels[0] : undefined;
+      const coverRow: ComicPreviewPagePayload = {
+        pageNumber: 0,
+        pageType: "cover",
+        imageUrl: firstPanelHref,
+        panelImages: [firstPanelHref],
+        panels: firstPanel ? [firstPanel] : undefined,
+        scenes: p0.scenes,
+        generationMode: p0.generationMode,
+        serverPageIndex: 0,
+        syntheticCover: true,
+      };
+      // Avoid two "Cover" headers when the first stored page is already type "cover" but
+      // the full grid is shown on the next row.
+      const rest = built.map((row, i) => {
+        if (i === 0 && p0.pageType === "cover") {
+          return { ...row, pageType: "body" as const };
+        }
+        return row;
+      });
+      return [coverRow, ...rest];
+    }
+
+    return built;
   } catch (e) {
     console.warn("fetchComicPagesForPreview failed:", e);
     return null;

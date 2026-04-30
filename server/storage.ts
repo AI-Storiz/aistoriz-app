@@ -482,6 +482,36 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
+  /**
+   * First non-empty imageUrl / imageUri / panel in array order. Shared by thumbnails and
+   * cover `panel/-1` fallback when slot 0 is blank but a later page has art.
+   */
+  private firstNonEmptyImageFromPages(pages: unknown[]): string | null {
+    for (const raw of pages) {
+      if (raw == null || typeof raw !== "object") {
+        continue;
+      }
+      const p = raw as Record<string, unknown>;
+      const u = typeof p.imageUrl === "string" ? p.imageUrl.trim() : "";
+      if (u) {
+        return u;
+      }
+      const iu = typeof p.imageUri === "string" ? p.imageUri.trim() : "";
+      if (iu) {
+        return iu;
+      }
+      const pan = p.panelImages;
+      if (Array.isArray(pan)) {
+        for (const cell of pan) {
+          if (typeof cell === "string" && cell.trim()) {
+            return cell.trim();
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   /** Resolves the image URL for a panel (`panelIndex === -1` = full-page or first panel fallback). */
   async getComicPanelImage(comicId: number, userId: string, pageIndex: number, panelIndex: number): Promise<string | null> {
     const safePageIdx = Math.max(0, Math.min(512, Math.floor(pageIndex)));
@@ -515,6 +545,13 @@ export class DatabaseStorage implements IStorage {
           }
         }
       }
+      // Cover slot (page 0) may be empty while a later page has the real art; match history thumbnail.
+      if (safePageIdx === 0) {
+        const fromAny = this.firstNonEmptyImageFromPages(comic.pages);
+        if (fromAny) {
+          return fromAny;
+        }
+      }
       console.log(`Image not found: comic=${comicId}, page=${safePageIdx}, panel=${safePanelIdx}`);
       return null;
     }
@@ -542,30 +579,7 @@ export class DatabaseStorage implements IStorage {
     if (!comic?.pages || !Array.isArray(comic.pages)) {
       return null;
     }
-    for (const p of comic.pages) {
-      if (p == null || typeof p !== "object") {
-        continue;
-      }
-      const page = p as Record<string, unknown>;
-      const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
-      const a = str(page.imageUrl);
-      if (a) {
-        return a;
-      }
-      const b = str(page.imageUri);
-      if (b) {
-        return b;
-      }
-      const pan = page.panelImages;
-      if (Array.isArray(pan)) {
-        for (const cell of pan) {
-          if (typeof cell === "string" && cell.trim()) {
-            return cell.trim();
-          }
-        }
-      }
-    }
-    return null;
+    return this.firstNonEmptyImageFromPages(comic.pages);
   }
 
   async createUserComic(userId: string, data: { title: string; style: string; characterNames: string[]; pages: any[] }): Promise<UserComic> {

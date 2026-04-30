@@ -563,7 +563,8 @@ export default function GeneratingScreen() {
           if (urlPages && urlPages.length > 0) {
             // Keep generation mode / type / copy from the job if metadata is missing (avoids wrong Preview branch for page 0).
             pagesForPreview = urlPages.map((p, i) => {
-              const j = job.pages[i] as any;
+              const idx = p.serverPageIndex ?? i;
+              const j = job.pages[idx] as any;
               if (!j) return p;
               return {
                 ...p,
