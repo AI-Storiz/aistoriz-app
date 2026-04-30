@@ -7,7 +7,6 @@ import {
   Pressable,
   Alert,
   Dimensions,
-  Platform,
   Modal,
   ActivityIndicator,
   type ListRenderItemInfo,
@@ -497,7 +496,8 @@ export default function PreviewScreen() {
           { paddingBottom: insets.bottom + (isReadOnly ? Spacing.xl : 120) },
         ]}
         showsVerticalScrollIndicator={false}
-        removeClippedSubviews={Platform.OS === "android"}
+        // Clipping the first item can leave images blank on some Android devices with expo-image.
+        removeClippedSubviews={false}
         initialNumToRender={2}
         maxToRenderPerBatch={2}
         windowSize={5}

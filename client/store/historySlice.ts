@@ -47,7 +47,7 @@ export const fetchHistory = createAsyncThunk<
     const { comics: apiComics } = await response.json();
     const apiBase = getApiUrl();
     const mappedComics: SavedComicLightweight[] = apiComics.map((c: Record<string, unknown>) => {
-      const thumb = new URL(`/api/comics/${c.id}/page/0/panel/-1/image`, apiBase);
+      const thumb = new URL(`/api/comics/${c.id}/first-image`, apiBase);
       thumb.searchParams.set("token", token);
       return {
         id: String(c.id),

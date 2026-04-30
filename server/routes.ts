@@ -9,6 +9,15 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { eq } from "drizzle-orm";
 import { storage } from "./storage";
+import {
+  assertComicS3Configured,
+  comicS3ErrorPayload,
+  ComicS3Error,
+  ingestComicPagesToS3,
+  isComicAssetUrl,
+  normalizeComicPagesOrder,
+  uploadTestPngToS3,
+} from "./comicS3";
 import { db } from "./db";
 import { comicJobs } from "../shared/schema";
 import { sendVerificationEmail, sendPasswordResetEmail, sendWelcomeEmail } from "./email";
@@ -35,25 +44,31 @@ function getBase64ImageSize(dataUri: string | undefined | null): number | null {
   }
 }
 
-/**
- * Comic pages are often stored as data:image/...;base64,... in Postgres.
- * On revisit, the app loads those via HTTP; we must decode here — never redirect to a
- * data: URL (Location headers are unreliable; Expo Image often shows a blank image).
- */
-function decodeComicDataUriToBuffer(imageData: string): { buffer: Buffer; contentType: string } | null {
-  const trimmed = imageData.trim();
-  const m = trimmed.match(/^data:image\/([\w.+-]+);base64,([\s\S]*)$/i);
-  if (!m) return null;
-  const subtypeRaw = m[1].toLowerCase();
-  const b64 = m[2].replace(/\s/g, "");
-  if (!b64) return null;
+/** Create row with `pages: []`, ingest to S3, then update with `https` URLs. Deletes row on failure. */
+async function createUserComicS3Only(
+  userId: string,
+  data: { title: string; style: string; characterNames: string[]; pages: any[] }
+) {
+  assertComicS3Configured();
+  const row = await storage.createUserComic(userId, {
+    title: data.title,
+    style: data.style,
+    characterNames: data.characterNames,
+    pages: [],
+  });
   try {
-    const buffer = Buffer.from(b64, "base64");
-    if (!buffer.length) return null;
-    const mimeSubtype = subtypeRaw === "jpg" ? "jpeg" : subtypeRaw;
-    return { buffer, contentType: `image/${mimeSubtype}` };
-  } catch {
-    return null;
+    const ingested = await ingestComicPagesToS3(userId, row.id, data.pages);
+    const { pages: normalizedPages } = normalizeComicPagesOrder(ingested);
+    const updated = await storage.updateUserComic(row.id, userId, { pages: normalizedPages });
+    if (!updated) {
+      throw new ComicS3Error("Failed to persist comic pages after S3 ingest");
+    }
+    return updated;
+  } catch (e) {
+    await storage.deleteUserComic(row.id, userId).catch(() => {
+      /* best-effort */
+    });
+    throw e;
   }
 }
 
@@ -2310,7 +2325,7 @@ PANEL BORDER RESPECT (CRITICAL — ZERO TOLERANCE):
 
     if (job.userId && !job.savedToLibrary) {
       try {
-        const comic = await storage.createUserComic(job.userId, {
+        const comic = await createUserComicS3Only(job.userId, {
           title: job.title || "Untitled Comic",
           style: job.style || "Comic",
           characterNames: job.characterNames || [],
@@ -3652,7 +3667,7 @@ Dramatic professional cover art, eye-catching cinematic composition.`;
     // but savedToLibrary is still false, causing a duplicate save
     if (job.userId && !job.savedToLibrary) {
       try {
-        const comic = await storage.createUserComic(job.userId, {
+        const comic = await createUserComicS3Only(job.userId, {
           title: job.title || "Untitled Comic",
           style: job.style || "Comic",
           characterNames: job.characterNames || [],
@@ -3689,6 +3704,7 @@ Dramatic professional cover art, eye-catching cinematic composition.`;
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  assertComicS3Configured();
   storage.seedDefaultArtStyles().catch(console.error);
 
   if (process.env.NODE_ENV === "production") {
@@ -4950,6 +4966,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // =============== USER COMICS API ===============
+  /** Quick S3 check (curl): `POST` with `Authorization: Bearer <jwt>`. Pings `{prefix}/_s3_test/...` */
+  app.post("/api/test-s3", requireUserAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req as any).userId;
+      const result = await uploadTestPngToS3(userId);
+      res.json({ ok: true, ...result });
+    } catch (error: any) {
+      if (error instanceof ComicS3Error) {
+        return res
+          .status(error.code === "S3_NOT_CONFIGURED" ? 503 : 422)
+          .json(comicS3ErrorPayload(error));
+      }
+      console.error("Test S3 error:", error);
+      res.status(500).json({ error: "S3 test failed" });
+    }
+  });
+
   // Get all user's saved comics (lightweight - no pages data)
   app.get("/api/comics", requireUserAuth, async (req: Request, res: Response) => {
     try {
@@ -4959,6 +4992,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Get comics error:", error);
       res.status(500).json({ error: "Failed to get comics" });
+    }
+  });
+
+  /**
+   * Redirect to the first non-empty page image in storage order (skips a blank page 0).
+   * For history thumbnails; do not hard-code `/page/0/...` only.
+   */
+  app.get("/api/comics/:id/first-image", requireUserAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req as any).userId;
+      const id = parseInt(req.params.id as string, 10);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid comic ID" });
+      }
+      const imageData = await storage.getComicFirstImageUrl(id, userId);
+      if (imageData == null) {
+        return res.status(404).json({ error: "Image not found" });
+      }
+      const trimmed = String(imageData).trim();
+      if (!trimmed) {
+        return res.status(404).json({ error: "Image not found" });
+      }
+      if (isComicAssetUrl(trimmed)) {
+        res.set("Cache-Control", "public, max-age=3600");
+        return res.redirect(302, trimmed);
+      }
+      return res.status(400).json({ error: "Invalid comic image URL" });
+    } catch (error: any) {
+      console.error("Get first comic image error:", error);
+      res.status(500).json({ error: "Failed to get image" });
     }
   });
 
@@ -4975,27 +5038,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const imageData = await storage.getComicPanelImage(comicId, userId, pageNum, panelNum);
-      
-      if (!imageData) {
+      if (imageData == null) {
         return res.status(404).json({ error: "Image not found" });
       }
 
-      const decoded = decodeComicDataUriToBuffer(imageData);
-      if (decoded) {
-        const { buffer, contentType } = decoded;
-        // Always send a full body (no 304). RN image clients can show a blank frame when the same
-        // comic image URL is requested again (e.g. History thumbnail then cover on page 1).
-        res.set("Content-Type", contentType);
-        res.set("Cache-Control", "private, max-age=86400");
-        return res.send(buffer);
+      const trimmed = String(imageData).trim();
+      if (!trimmed) {
+        return res.status(404).json({ error: "Image not found" });
       }
 
-      const trimmed = imageData.trim();
-      if (/^https?:\/\//i.test(trimmed)) {
-        return res.redirect(trimmed);
+      if (isComicAssetUrl(trimmed)) {
+        res.set("Cache-Control", "public, max-age=86400");
+        return res.redirect(302, trimmed);
       }
 
-      return res.status(404).json({ error: "Image not found or unsupported format" });
+      return res.status(400).json({ error: "Invalid comic image URL" });
     } catch (error: any) {
       console.error("Get panel image error:", error);
       res.status(500).json({ error: "Failed to get image" });
@@ -5053,14 +5110,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Missing required fields" });
       }
       
-      const comic = await storage.createUserComic(userId, {
+      const comic = await createUserComicS3Only(userId, {
         title,
         style,
         characterNames: characterNames || [],
-        pages
+        pages,
       });
       res.json({ comic });
     } catch (error: any) {
+      if (error instanceof ComicS3Error) {
+        return res
+          .status(error.code === "S3_NOT_CONFIGURED" ? 503 : 422)
+          .json(comicS3ErrorPayload(error));
+      }
       console.error("Save comic error:", error);
       res.status(500).json({ error: "Failed to save comic" });
     }
@@ -5072,13 +5134,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = (req as any).userId;
       const comicId = parseInt(req.params.id as string);
       const { title, pages } = req.body;
-      
-      const comic = await storage.updateUserComic(comicId, userId, { title, pages });
+
+      if (isNaN(comicId)) {
+        return res.status(400).json({ error: "Invalid comic ID" });
+      }
+
+      const existing = await storage.getUserComicById(comicId, userId);
+      if (!existing) {
+        return res.status(404).json({ error: "Comic not found" });
+      }
+
+      if (pages !== undefined) {
+        const ingested = await ingestComicPagesToS3(userId, comicId, pages);
+        const { pages: normalizedPages } = normalizeComicPagesOrder(ingested);
+        const comic = await storage.updateUserComic(comicId, userId, { title, pages: normalizedPages });
+        if (!comic) {
+          return res.status(404).json({ error: "Comic not found" });
+        }
+        return res.json({ comic });
+      }
+
+      const comic = await storage.updateUserComic(comicId, userId, { title });
       if (!comic) {
         return res.status(404).json({ error: "Comic not found" });
       }
-      res.json({ comic });
+      return res.json({ comic });
     } catch (error: any) {
+      if (error instanceof ComicS3Error) {
+        return res
+          .status(error.code === "S3_NOT_CONFIGURED" ? 503 : 422)
+          .json(comicS3ErrorPayload(error));
+      }
       console.error("Update comic error:", error);
       res.status(500).json({ error: "Failed to update comic" });
     }

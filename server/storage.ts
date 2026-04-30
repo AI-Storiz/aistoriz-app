@@ -3,6 +3,7 @@ import { db } from "./db";
 import { eq, sql, and, desc, gte } from "drizzle-orm";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
+import { normalizeComicPagesOrder } from "./comicS3";
 
 function generateUserId(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -400,7 +401,29 @@ export class DatabaseStorage implements IStorage {
     return comics;
   }
 
+  /**
+   * Strips leading pages with no images and renumbers pageNumber. Persists when changed
+   * so list metadata, thumbnails, and /page/0/... all match the same array.
+   */
+  private async ensureComicPagesNormalized(id: number, userId: string): Promise<void> {
+    const [row] = await db
+      .select({ pages: userComics.pages })
+      .from(userComics)
+      .where(and(eq(userComics.id, id), eq(userComics.userId, userId)));
+    if (!row?.pages) {
+      return;
+    }
+    const { pages: next, changed } = normalizeComicPagesOrder(row.pages as unknown[]);
+    if (changed) {
+      await db
+        .update(userComics)
+        .set({ pages: next as any, updatedAt: new Date() })
+        .where(and(eq(userComics.id, id), eq(userComics.userId, userId)));
+    }
+  }
+
   async getUserComicById(id: number, userId: string): Promise<UserComic | undefined> {
+    await this.ensureComicPagesNormalized(id, userId);
     const [comic] = await db
       .select()
       .from(userComics)
@@ -413,6 +436,7 @@ export class DatabaseStorage implements IStorage {
     characterNames: unknown; createdAt: Date;
     pagesMetadata: Array<{ pageNumber: number; pageType: string; panelCount: number; panels: any; scenes: any; hasImageUrl: boolean }>;
   } | undefined> {
+    await this.ensureComicPagesNormalized(id, userId);
     const [comic] = await db
       .select({
         id: userComics.id,
@@ -458,45 +482,90 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
+  /** Resolves the image URL for a panel (`panelIndex === -1` = full-page or first panel fallback). */
   async getComicPanelImage(comicId: number, userId: string, pageIndex: number, panelIndex: number): Promise<string | null> {
-    const safePageIdx = Math.max(0, Math.floor(pageIndex));
+    const safePageIdx = Math.max(0, Math.min(512, Math.floor(pageIndex)));
     const safePanelIdx = Math.floor(panelIndex);
-    
-    let sqlQuery;
-    if (safePanelIdx === -1) {
-      // Full-page slot: main imageUrl, then first non-empty panel (covers DB rows where imageUrl was never set)
-      sqlQuery = sql<string>`
-        COALESCE(
-          NULLIF(btrim(${userComics.pages}->${sql.raw(String(safePageIdx))}->>'imageUrl'), ''),
-          NULLIF(btrim(${userComics.pages}->${sql.raw(String(safePageIdx))}->>'imageUri'), ''),
-          (
-            SELECT x.value
-            FROM jsonb_array_elements_text(
-              COALESCE(${userComics.pages}->${sql.raw(String(safePageIdx))}->'panelImages', '[]'::jsonb)
-            ) AS x
-            WHERE length(btrim(x.value)) > 0
-            LIMIT 1
-          )
-        )
-      `;
-    } else {
-      sqlQuery = sql<string>`
-        ${userComics.pages}->${sql.raw(String(safePageIdx))}->'panelImages'->>${sql.raw(String(safePanelIdx))}
-      `;
+
+    const comic = await this.getUserComicById(comicId, userId);
+    if (!comic?.pages || !Array.isArray(comic.pages)) {
+      return null;
     }
-    
-    const [result] = await db
-      .select({ imageData: sqlQuery })
-      .from(userComics)
-      .where(and(eq(userComics.id, comicId), eq(userComics.userId, userId)));
-    
-    const raw = result?.imageData;
-    const trimmed = raw != null ? String(raw).trim() : "";
-    if (!trimmed) {
+    const page = comic.pages[safePageIdx];
+    if (page == null || typeof page !== "object") {
       console.log(`Image not found: comic=${comicId}, page=${safePageIdx}, panel=${safePanelIdx}`);
       return null;
     }
-    return trimmed;
+    const p = page as Record<string, unknown>;
+
+    if (safePanelIdx === -1) {
+      const u = typeof p.imageUrl === "string" ? p.imageUrl.trim() : "";
+      if (u) {
+        return u;
+      }
+      const i = typeof p.imageUri === "string" ? p.imageUri.trim() : "";
+      if (i) {
+        return i;
+      }
+      const pan = p.panelImages;
+      if (Array.isArray(pan)) {
+        for (const cell of pan) {
+          if (typeof cell === "string" && cell.trim()) {
+            return cell.trim();
+          }
+        }
+      }
+      console.log(`Image not found: comic=${comicId}, page=${safePageIdx}, panel=${safePanelIdx}`);
+      return null;
+    }
+
+    const pan = p.panelImages;
+    if (!Array.isArray(pan) || safePanelIdx < 0 || safePanelIdx >= pan.length) {
+      console.log(`Image not found: comic=${comicId}, page=${safePageIdx}, panel=${safePanelIdx}`);
+      return null;
+    }
+    const cell = pan[safePanelIdx];
+    const t = typeof cell === "string" && cell.trim() ? cell.trim() : "";
+    if (!t) {
+      console.log(`Image not found: comic=${comicId}, page=${safePageIdx}, panel=${safePanelIdx}`);
+      return null;
+    }
+    return t;
+  }
+
+  /**
+   * First available image URL in `pages` order (cover may be empty; skips blank slots).
+   * Used for list thumbnails, not a specific page index.
+   */
+  async getComicFirstImageUrl(comicId: number, userId: string): Promise<string | null> {
+    const comic = await this.getUserComicById(comicId, userId);
+    if (!comic?.pages || !Array.isArray(comic.pages)) {
+      return null;
+    }
+    for (const p of comic.pages) {
+      if (p == null || typeof p !== "object") {
+        continue;
+      }
+      const page = p as Record<string, unknown>;
+      const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+      const a = str(page.imageUrl);
+      if (a) {
+        return a;
+      }
+      const b = str(page.imageUri);
+      if (b) {
+        return b;
+      }
+      const pan = page.panelImages;
+      if (Array.isArray(pan)) {
+        for (const cell of pan) {
+          if (typeof cell === "string" && cell.trim()) {
+            return cell.trim();
+          }
+        }
+      }
+    }
+    return null;
   }
 
   async createUserComic(userId: string, data: { title: string; style: string; characterNames: string[]; pages: any[] }): Promise<UserComic> {

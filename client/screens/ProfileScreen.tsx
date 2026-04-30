@@ -24,7 +24,7 @@ import * as Notifications from "expo-notifications";
 import Constants from "expo-constants";
 import { Feather } from "@expo/vector-icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, getApiUrl } from "@/lib/query-client";
+import { apiRequest } from "@/lib/query-client";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 
 import { useAuth } from "@/contexts/AuthContext";

@@ -2,6 +2,9 @@ import { getExpoGoProjectConfig } from "expo";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { Platform } from "react-native";
 
+/** Must match the server default in `server/index.ts` (PORT or 5001). */
+const DEFAULT_DEV_API_PORT = "5001";
+
 function normalizeApiBaseUrl(raw: string): string {
   const url = new URL(raw.trim());
   return url.href.endsWith("/") ? url.href : `${url.href}/`;
@@ -18,6 +21,43 @@ function isLikelyLocalDevHost(hostname: string): boolean {
 }
 
 /**
+ * `EXPO_PUBLIC_API_URL` often uses `http://127.0.0.1:5001` for simulators, but on a
+ * physical device or Android emulator, loopback is the device itself. Prefer Metro's
+ * `debuggerHost` (same machine as the bundler), else Android emulator → `10.0.2.2`.
+ */
+function rewriteLoopbackForNativeIfNeeded(urlString: string): string {
+  if (Platform.OS === "web") {
+    return urlString;
+  }
+  let url: URL;
+  try {
+    url = new URL(urlString.trim());
+  } catch {
+    return urlString;
+  }
+  if (url.hostname !== "127.0.0.1" && url.hostname !== "localhost") {
+    return urlString;
+  }
+  const port = url.port || DEFAULT_DEV_API_PORT;
+  const debuggerHost = getExpoGoProjectConfig()?.debuggerHost;
+  if (debuggerHost) {
+    const devHost = debuggerHost.split(":")[0] ?? "";
+    if (
+      devHost &&
+      devHost !== "127.0.0.1" &&
+      devHost !== "localhost" &&
+      isLikelyLocalDevHost(devHost)
+    ) {
+      return normalizeApiBaseUrl(`http://${devHost}:${port}/`);
+    }
+  }
+  if (Platform.OS === "android") {
+    return normalizeApiBaseUrl(`http://10.0.2.2:${port}/`);
+  }
+  return urlString;
+}
+
+/**
  * Base URL for API `fetch` calls.
  *
  * Prefer `EXPO_PUBLIC_API_URL` in `.env` (inlined by Expo). Example:
@@ -29,7 +69,10 @@ export function getApiUrl(): string {
   const configured = process.env.EXPO_PUBLIC_API_URL?.trim();
   if (configured) {
     try {
-      return normalizeApiBaseUrl(configured);
+      const base = rewriteLoopbackForNativeIfNeeded(
+        normalizeApiBaseUrl(configured),
+      );
+      return base;
     } catch {
       console.warn(
         "[getApiUrl] Invalid EXPO_PUBLIC_API_URL; falling back to dev defaults.",
@@ -59,10 +102,10 @@ export function getApiUrl(): string {
 
   const debuggerHost = getExpoGoProjectConfig()?.debuggerHost;
   const hostWithPort = debuggerHost
-    ? `${debuggerHost.split(":")[0]}:5000`
+    ? `${debuggerHost.split(":")[0]}:${DEFAULT_DEV_API_PORT}`
     : Platform.OS === "android"
-      ? "10.0.2.2:5000"
-      : "localhost:5000";
+      ? `10.0.2.2:${DEFAULT_DEV_API_PORT}`
+      : `localhost:${DEFAULT_DEV_API_PORT}`;
 
   const hostPart = hostWithPort.split(":")[0] ?? "";
   const proto = isLikelyLocalDevHost(hostPart) ? "http:" : "https:";

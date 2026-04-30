@@ -37,16 +37,17 @@ export async function fetchComicPagesForPreview(
       return u.toString();
     };
 
-    return (fullComic.pages || []).map((page: any) => {
-      const pageIdx = page._pageIndex ?? 0;
+    // 0-based index into `userComics.pages` (jsonb array); must match storage.getComicPanelImage.
+    return (fullComic.pages || []).map((page: any, index: number) => {
+      const safePageIdx = index;
       const panelImages = Array.from({ length: page.panelCount || 0 }, (_, panelIdx) =>
-        panelImageHref(pageIdx, panelIdx)
+        panelImageHref(safePageIdx, panelIdx)
       );
       const imageUrl = page.hasImageUrl
-        ? panelImageHref(pageIdx, -1)
+        ? panelImageHref(safePageIdx, -1)
         : panelImages.length > 0
           ? panelImages[0]
-          : panelImageHref(pageIdx, -1);
+          : panelImageHref(safePageIdx, -1);
 
       return {
         pageNumber: page.pageNumber,

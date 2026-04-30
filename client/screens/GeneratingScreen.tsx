@@ -561,7 +561,18 @@ export default function GeneratingScreen() {
         if (token && comicIdForPreviewUrls != null) {
           const urlPages = await fetchComicPagesForPreview(String(comicIdForPreviewUrls), token);
           if (urlPages && urlPages.length > 0) {
-            pagesForPreview = urlPages;
+            // Keep generation mode / type / copy from the job if metadata is missing (avoids wrong Preview branch for page 0).
+            pagesForPreview = urlPages.map((p, i) => {
+              const j = job.pages[i] as any;
+              if (!j) return p;
+              return {
+                ...p,
+                generationMode: p.generationMode ?? j.generationMode,
+                pageType: p.pageType ?? j.pageType,
+                scenes: p.scenes ?? j.scenes,
+                panels: p.panels ?? j.panels,
+              };
+            });
             console.log("Preview will use API image URLs (reduced memory vs inline images)");
           }
         }
