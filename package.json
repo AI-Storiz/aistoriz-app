@@ -5,7 +5,7 @@
   "scripts": {
     "expo:start": "env -u CI npx expo start",
     "expo:dev": "npx expo start --localhost",
-    "server:dev": "PORT=5001 NODE_ENV=development tsx server/index.ts",
+    "server:dev": "NODE_ENV=development tsx server/index.ts",
     "expo:start:static:build": "npx expo start --no-dev --minify --localhost",
     "expo:static:build": "node scripts/build.js",
     "server:build": "esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=server_dist",
