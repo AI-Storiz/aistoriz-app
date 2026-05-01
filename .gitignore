@@ -20,6 +20,7 @@ ios/build/
 *.p12
 
 # local env / secrets
+.env.local
 .env
 .env.*
 !.env.example
