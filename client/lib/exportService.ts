@@ -4,6 +4,7 @@ import * as Sharing from "expo-sharing";
 import * as Print from "expo-print";
 import { Platform, Alert } from "react-native";
 import JSZip from "jszip";
+import { getApiUrl } from "./query-client";
 
 export interface PanelData {
   description?: string;
@@ -52,8 +53,17 @@ const ensureDirectoryExists = async (dirPath: string): Promise<void> => {
 const uniqueCacheFile = (prefix: string, ext: string) =>
   `${FileSystem.cacheDirectory}${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 11)}.${ext}`;
 
-/** Comic image URLs often carry `?token=`; RN fetch is more reliable with Bearer as well. */
+/**
+ * Comic image URLs often carry `?token=`; RN fetch is more reliable with Bearer as well.
+ * On web, we don't need auth headers because the proxy API handles authentication.
+ */
 function buildImageFetchHeaders(url: string): Record<string, string> {
+  if (Platform.OS === "web") {
+    return {
+      Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+    };
+  }
+
   const headers: Record<string, string> = {
     Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
   };
@@ -279,19 +289,114 @@ export const exportToPDF = async (
   title: string = "My Comic"
 ): Promise<ExportResult> => {
   try {
-    if (Platform.OS === "web") {
-      return { success: false, message: "PDF export is not supported on web." };
-    }
-
     if (pages.length === 0) {
       return { success: false, message: "No pages to export." };
     }
 
+    if (Platform.OS === "web") {
+      // On web, use jspdf to generate PDF directly
+      try {
+        // Dynamically import jspdf (only loads on web)
+        const { jsPDF } = await import('jspdf');
+        const pdf = new jsPDF({
+          orientation: 'portrait',
+          unit: 'px',
+          format: 'a4',
+          compress: true,
+        });
+
+        const pageWidth = pdf.internal.pageSize.getWidth();
+        const pageHeight = pdf.internal.pageSize.getHeight();
+        const margin = 40;
+        const contentWidth = pageWidth - (margin * 2);
+        const contentHeight = pageHeight - (margin * 2);
+
+        let isFirstPage = true;
+
+        for (const page of pages) {
+          if (!isFirstPage) {
+            pdf.addPage();
+          }
+          isFirstPage = false;
+
+          // Add page label
+          const pageLabel = page.pageType === 'cover' ? 'Cover' : page.pageType === 'conclusion' ? 'Conclusion' : `Page ${page.pageNumber}`;
+          pdf.setFontSize(12);
+          pdf.setTextColor(100, 100, 100);
+          pdf.text(pageLabel, margin, margin - 10);
+
+          // Get all images for this page
+          const images = getFlatImageUrlsForExport(page);
+          if (images.length === 0 && page.imageUrl?.trim()) {
+            images.push(page.imageUrl.trim());
+          }
+
+          if (images.length === 0) {
+            continue;
+          }
+
+          // Convert first image to data URL and add to PDF
+          try {
+            const dataUrl = await getImageAsDataUrl(images[0]);
+
+            // Calculate dimensions to fit within content area while maintaining aspect ratio
+            const img = new window.Image();
+            await new Promise((resolve, reject) => {
+              img.onload = resolve;
+              img.onerror = reject;
+              img.src = dataUrl;
+            });
+
+            const aspectRatio = img.width / img.height;
+            let imgWidth = contentWidth;
+            let imgHeight = contentWidth / aspectRatio;
+
+            // If height exceeds content area, scale by height instead
+            if (imgHeight > contentHeight) {
+              imgHeight = contentHeight;
+              imgWidth = contentHeight * aspectRatio;
+            }
+
+            // Center the image
+            const xPos = margin + (contentWidth - imgWidth) / 2;
+            const yPos = margin;
+
+            pdf.addImage(dataUrl, 'JPEG', xPos, yPos, imgWidth, imgHeight);
+          } catch (imgError) {
+            console.error(`Failed to add image for page ${page.pageNumber}:`, imgError);
+          }
+        }
+
+        // Save the PDF
+        const pdfBlob = pdf.output('blob');
+        const url = URL.createObjectURL(pdfBlob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${title.replace(/[^a-zA-Z0-9]/g, "_")}_${Date.now()}.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(url), 100);
+
+        return {
+          success: true,
+          message: "PDF downloaded successfully! Check your Downloads folder.",
+        };
+      } catch (error: any) {
+        console.error("Web PDF generation error:", error);
+        return {
+          success: false,
+          message: `PDF generation failed: ${error.message}`,
+        };
+      }
+    }
+
+    // Mobile: Generate HTML and use Print API
     const imageHtmlPromises = pages.map(async (page) => {
       const pageLabel = page.pageType === 'cover' ? 'Cover' : page.pageType === 'conclusion' ? 'Conclusion' : `Page ${page.pageNumber}`;
-      
+
       let contentHtml = '';
-      
+
       const { urls: panelUrls, panels: panelRows } = getPanelImagesForExport(page);
       if (panelUrls.length > 0) {
         contentHtml = await generatePanelGridHtml(panelUrls, page.pageType, title, panelRows);
@@ -306,7 +411,7 @@ export const exportToPDF = async (
           </div>
         `;
       }
-      
+
       return `
         <div style="page-break-after: always; padding: 15px; box-sizing: border-box; height: 100vh; display: flex; flex-direction: column;">
           <h2 style="font-family: Arial, sans-serif; margin: 0 0 10px 0; font-size: 14px; color: #666;">${pageLabel}</h2>
@@ -336,6 +441,7 @@ export const exportToPDF = async (
       </html>
     `;
 
+    // Mobile: Save PDF to file system
     const { uri } = await Print.printToFileAsync({
       html,
       base64: false,
@@ -370,21 +476,62 @@ export const exportToJPG = async (
 ): Promise<ExportResult> => {
   try {
     if (Platform.OS === "web") {
+      // On web, trigger browser downloads for each image by fetching as blob first
+      let downloadCount = 0;
+      let failedCount = 0;
+
       for (const page of pages) {
         const images = getFlatImageUrlsForExport(page);
         for (let i = 0; i < images.length; i++) {
-          const link = document.createElement("a");
-          link.href = images[i];
-          const fileName = images.length > 1
-            ? `${title}_page_${page.pageNumber}_panel_${i + 1}.jpg`
-            : `${title}_page_${page.pageNumber}.jpg`;
-          link.download = fileName;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
+          try {
+            // Fetch the image as a blob to avoid cross-origin issues
+            const response = await fetch(images[i], {
+              mode: 'cors',
+              credentials: 'include',
+            });
+
+            if (!response.ok) {
+              console.error(`Failed to fetch image: ${response.status}`);
+              failedCount++;
+              continue;
+            }
+
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+
+            const link = document.createElement("a");
+            link.href = url;
+            const fileName = images.length > 1
+              ? `${title}_page_${page.pageNumber}_panel_${i + 1}.jpg`
+              : `${title}_page_${page.pageNumber}.jpg`;
+            link.download = fileName;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            // Clean up the object URL after a short delay
+            setTimeout(() => URL.revokeObjectURL(url), 100);
+
+            downloadCount++;
+
+            // Small delay between downloads to avoid browser blocking
+            await new Promise(resolve => setTimeout(resolve, 200));
+          } catch (error) {
+            console.error(`Failed to download image:`, error);
+            failedCount++;
+          }
         }
       }
-      return { success: true, message: "Images downloaded to your browser." };
+
+      if (downloadCount === 0) {
+        return { success: false, message: "Failed to download any images. Please try again." };
+      }
+
+      const message = failedCount > 0
+        ? `${downloadCount} image${downloadCount !== 1 ? 's' : ''} downloaded. ${failedCount} failed. Check your Downloads folder.`
+        : `${downloadCount} image${downloadCount !== 1 ? 's' : ''} downloaded. Check your Downloads folder.`;
+
+      return { success: true, message };
     }
 
     const exportPath = getExportPath();
@@ -422,19 +569,66 @@ const getWebBase64 = async (imageUrl: string): Promise<string> => {
   if (imageUrl.startsWith("data:image")) {
     return imageUrl.split(",")[1];
   }
-  const response = await fetch(imageUrl, { headers: buildImageFetchHeaders(imageUrl) });
-  if (!response.ok) {
-    throw new Error(`Image download failed (${response.status})`);
+
+  // Try to fetch the image as blob first (works better with CORS)
+  try {
+    const response = await fetch(imageUrl, {
+      mode: 'cors',
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        const base64 = result.split(",")[1];
+        if (base64) {
+          resolve(base64);
+        } else {
+          reject(new Error("Failed to convert blob to base64"));
+        }
+      };
+      reader.onerror = () => reject(new Error("FileReader error"));
+      reader.readAsDataURL(blob);
+    });
+  } catch (fetchError) {
+    // Fallback: try with image element (won't work with CORS but worth trying)
+    console.warn("Fetch failed, trying image element:", fetchError);
+    return new Promise((resolve, reject) => {
+      const img = new window.Image();
+      // Don't set crossOrigin to avoid CORS preflight for same-origin images
+
+      img.onload = () => {
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) {
+            reject(new Error("Could not get canvas context"));
+            return;
+          }
+          ctx.drawImage(img, 0, 0);
+          const dataURL = canvas.toDataURL("image/jpeg", 0.95);
+          const base64 = dataURL.split(",")[1];
+          resolve(base64);
+        } catch (error) {
+          reject(error);
+        }
+      };
+
+      img.onerror = () => {
+        reject(new Error(`Failed to load image: ${imageUrl}`));
+      };
+
+      img.src = imageUrl;
+    });
   }
-  const blob = await response.blob();
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const result = reader.result as string;
-      resolve(result.split(",")[1]);
-    };
-    reader.readAsDataURL(blob);
-  });
 };
 
 export const exportToZIP = async (
@@ -443,29 +637,61 @@ export const exportToZIP = async (
 ): Promise<ExportResult> => {
   try {
     if (Platform.OS === "web") {
+      console.log("[ZIP] Starting ZIP export for", pages.length, "pages");
       const zip = new JSZip();
+      let successCount = 0;
+      let failedCount = 0;
+
       for (const page of pages) {
         const images = getFlatImageUrlsForExport(page);
+        console.log(`[ZIP] Page ${page.pageNumber}: Found ${images.length} images`);
+
         for (let i = 0; i < images.length; i++) {
-          const base64Data = await getWebBase64(images[i]);
-          const fileName = images.length > 1 
-            ? `page_${page.pageNumber}_panel_${i + 1}.jpg`
-            : `page_${page.pageNumber}.jpg`;
-          zip.file(fileName, base64Data, { base64: true });
+          try {
+            console.log(`[ZIP] Fetching image: ${images[i]}`);
+            const base64Data = await getWebBase64(images[i]);
+            const fileName = images.length > 1
+              ? `page_${page.pageNumber}_panel_${i + 1}.jpg`
+              : `page_${page.pageNumber}.jpg`;
+            zip.file(fileName, base64Data, { base64: true });
+            successCount++;
+            console.log(`[ZIP] Successfully added ${fileName}`);
+          } catch (error) {
+            console.error(`[ZIP] Failed to add image to ZIP: ${images[i]}`, error);
+            failedCount++;
+          }
         }
       }
 
+      if (successCount === 0) {
+        console.error("[ZIP] No images were added to ZIP");
+        return {
+          success: false,
+          message: "Could not add any images to ZIP. Please check console for errors."
+        };
+      }
+
+      console.log(`[ZIP] Generating ZIP file with ${successCount} images`);
       const content = await zip.generateAsync({ type: "blob" });
       const url = URL.createObjectURL(content);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `${title}.zip`;
+      const zipFileName = `${title.replace(/[^a-zA-Z0-9]/g, "_")}_${Date.now()}.zip`;
+      link.download = zipFileName;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      URL.revokeObjectURL(url);
 
-      return { success: true, message: "ZIP file downloaded!" };
+      // Clean up after a delay
+      setTimeout(() => URL.revokeObjectURL(url), 100);
+
+      console.log(`[ZIP] ZIP file download triggered: ${zipFileName}`);
+
+      const message = failedCount > 0
+        ? `ZIP created with ${successCount} image${successCount !== 1 ? 's' : ''}. ${failedCount} image${failedCount !== 1 ? 's' : ''} could not be added. Check your Downloads folder.`
+        : `ZIP file with ${successCount} image${successCount !== 1 ? 's' : ''} downloaded! Check your Downloads folder.`;
+
+      return { success: true, message };
     }
 
     const zip = new JSZip();
@@ -604,14 +830,71 @@ export const sharePDF = async (pages: ComicPage[], title: string): Promise<Expor
 export const shareComicPageJPG = async (page: ComicPage): Promise<ExportResult> => {
   try {
     if (Platform.OS === "web") {
-      if (navigator.share) {
-        await navigator.share({
-          title: `Comic Page ${page.pageNumber}`,
-          text: "Check out this comic page!",
-        });
-        return { success: true, message: "Shared!" };
+      // On web, download the page image directly instead of sharing
+      const images = getFlatImageUrlsForExport(page);
+      if (images.length === 0) {
+        const mainImage = (page.imageUrl || "").trim();
+        if (mainImage) {
+          images.push(mainImage);
+        }
       }
-      return { success: false, message: "Sharing not supported in this browser." };
+
+      if (images.length === 0) {
+        return { success: false, message: "No image available to download." };
+      }
+
+      // Download each image by fetching as blob first
+      let downloadCount = 0;
+      for (let i = 0; i < images.length; i++) {
+        try {
+          // Fetch the image as a blob
+          const response = await fetch(images[i], {
+            mode: 'cors',
+            credentials: 'include',
+          });
+
+          if (!response.ok) {
+            console.error(`Failed to fetch image: ${response.status}`);
+            continue;
+          }
+
+          const blob = await response.blob();
+          const url = URL.createObjectURL(blob);
+
+          const link = document.createElement("a");
+          link.href = url;
+          const fileName = images.length > 1
+            ? `page_${page.pageNumber}_panel_${i + 1}.jpg`
+            : `page_${page.pageNumber}.jpg`;
+          link.download = fileName;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+
+          // Clean up the object URL after a short delay
+          setTimeout(() => URL.revokeObjectURL(url), 100);
+
+          downloadCount++;
+
+          // Small delay between downloads
+          if (i < images.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
+        } catch (error) {
+          console.error(`Failed to download image ${i}:`, error);
+        }
+      }
+
+      if (downloadCount === 0) {
+        return { success: false, message: "Failed to download images. Please try again." };
+      }
+
+      return {
+        success: true,
+        message: downloadCount > 1
+          ? `${downloadCount} images downloaded. Check your Downloads folder.`
+          : "Image downloaded. Check your Downloads folder."
+      };
     }
 
     const candidates: string[] = [];
