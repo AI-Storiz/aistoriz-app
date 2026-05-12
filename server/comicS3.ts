@@ -13,6 +13,38 @@ const UPLOAD_CONCURRENCY = (() => {
 })();
 
 const FETCH_TIMEOUT_MS = 120_000;
+const REMOTE_SOURCE_FETCH_ATTEMPTS = 3;
+const REMOTE_SOURCE_FETCH_RETRY_MS = 500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Fetches a provider image URL with short retries (transient CDN / TLS / 5xx). */
+async function fetchRemoteImageForIngest(url: string): Promise<Response> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= REMOTE_SOURCE_FETCH_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+      if (res.ok) {
+        return res;
+      }
+      if (res.status >= 500 && attempt < REMOTE_SOURCE_FETCH_ATTEMPTS) {
+        await sleep(REMOTE_SOURCE_FETCH_RETRY_MS * attempt);
+        continue;
+      }
+      return res;
+    } catch (e) {
+      lastErr = e;
+      if (attempt < REMOTE_SOURCE_FETCH_ATTEMPTS) {
+        await sleep(REMOTE_SOURCE_FETCH_RETRY_MS * attempt);
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
 
 /** Public base (CDN or S3 virtual-hosted) used in stored URLs — fixed at process start. */
 const PUBLIC_BASE: string = (() => {
@@ -144,6 +176,39 @@ function isOnOurStorageHttps(url: string): boolean {
   return false;
 }
 
+function mediaReferenceNeedsS3Upload(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && !isOnOurStorageHttps(value);
+}
+
+/**
+ * True when any non-empty image field is not already stored on this app’s S3 / CDN
+ * (still inline `data:`, `http:`, or third-party `https:`).
+ */
+export function comicPagesNeedS3Ingest(pages: unknown): boolean {
+  if (!Array.isArray(pages)) {
+    return false;
+  }
+  for (const raw of pages) {
+    if (raw == null || typeof raw !== "object") {
+      continue;
+    }
+    const o = raw as Record<string, unknown>;
+    if (mediaReferenceNeedsS3Upload(o.imageUrl) || mediaReferenceNeedsS3Upload(o.imageUri)) {
+      return true;
+    }
+    const pan = o.panelImages;
+    if (!Array.isArray(pan)) {
+      continue;
+    }
+    for (const c of pan) {
+      if (mediaReferenceNeedsS3Upload(c)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function extFromContentType(contentType: string | undefined, fallback: string): string {
   if (!contentType) return fallback;
   const c = contentType.toLowerCase().split(";")[0]!.trim();
@@ -212,7 +277,7 @@ async function uploadComicFieldToS3OrThrow(
     contentType = decoded.contentType;
     ext = decoded.ext;
   } else if (t.startsWith("https://") || t.startsWith("http://")) {
-    const res = await fetch(t, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    const res = await fetchRemoteImageForIngest(t);
     if (!res.ok) {
       throw new ComicS3Error(
         `Failed to fetch source image (${res.status}) for field ${fieldKey}`
@@ -325,6 +390,27 @@ function assertPageFieldsAreAssetUrls(page: ComicPageRecord, pageIndex: number):
     if (cell.trim() && !isComicAssetUrl(cell)) {
       throw new ComicS3Error(`Page ${pageIndex} panelImages[${i}]: S3/ CDN https URL required`);
     }
+  }
+}
+
+/**
+ * Enforces that persisted comic JSON never stores `data:` URIs or arbitrary HTTPS URLs —
+ * only empty strings or HTTPS URLs on this app’s configured S3 / CDN origin.
+ * Call immediately before writing `user_comics.pages` or `comic_jobs.pages`.
+ */
+export function assertPersistedComicPagesAreAssetUrlsOnly(pages: unknown, context: string): void {
+  if (pages == null) {
+    return;
+  }
+  if (!Array.isArray(pages)) {
+    throw new ComicS3Error(`${context}: pages must be an array`);
+  }
+  for (let i = 0; i < pages.length; i++) {
+    const raw = pages[i];
+    if (raw == null || typeof raw !== "object") {
+      continue;
+    }
+    assertPageFieldsAreAssetUrls(raw as ComicPageRecord, i);
   }
 }
 
@@ -447,6 +533,13 @@ export async function ingestComicPagesToS3(
         );
       }
     }
+  }
+
+  if (tasks.length === 0) {
+    for (let pIdx = 0; pIdx < out.length; pIdx++) {
+      assertPageFieldsAreAssetUrls(out[pIdx]!, pIdx);
+    }
+    return out;
   }
 
   await Promise.all(tasks);

@@ -1,9 +1,9 @@
 import type { ImageSource } from "expo-image";
 
 /**
- * expo-image is more reliable for authenticated comic assets when the JWT is sent
- * as Authorization (some stacks mishandle very long ?token= query strings).
- * Strips token from the URL when headers are used.
+ * expo-image source for comic panels.
+ * Public https URLs (S3 / CDN) are used as-is — no base64, no app proxy.
+ * For legacy `/api/comics/.../image?token=` URLs, strips the token query and sends Authorization instead.
  */
 export function authedComicImageSource(
   rawUrl: string | undefined | null,
