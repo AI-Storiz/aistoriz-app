@@ -47,6 +47,10 @@ export const fetchHistory = createAsyncThunk<
     const { comics: apiComics } = await response.json();
     const apiBase = getApiUrl();
     const mappedComics: SavedComicLightweight[] = apiComics.map((c: Record<string, unknown>) => {
+      const directThumb =
+        typeof c.thumbnailAssetUrl === "string" && c.thumbnailAssetUrl.trim().length > 0
+          ? c.thumbnailAssetUrl.trim()
+          : null;
       const thumb = new URL(`/api/comics/${c.id}/first-image`, apiBase);
       thumb.searchParams.set("token", token);
       return {
@@ -56,7 +60,7 @@ export const fetchHistory = createAsyncThunk<
         style: String(c.style ?? ""),
         characterNames: Array.isArray(c.characterNames) ? (c.characterNames as string[]) : [],
         pagesCount: typeof c.pagesCount === "number" ? c.pagesCount : 0,
-        thumbnailUrl: thumb.toString(),
+        thumbnailUrl: directThumb ?? thumb.toString(),
       };
     });
     return mappedComics;

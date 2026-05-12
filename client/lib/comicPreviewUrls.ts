@@ -15,9 +15,17 @@ export interface ComicPreviewPagePayload {
   syntheticCover?: boolean;
 }
 
+/** Persisted comic assets are public https URLs (S3 / CDN). Use as Image source — no base64, no proxy. */
+function storedAssetHttps(url: unknown): string | null {
+  if (typeof url !== "string") return null;
+  const t = url.trim();
+  if (!t.startsWith("https://")) return null;
+  return t;
+}
+
 /**
- * Loads comic metadata and builds authenticated image URLs so Preview can render
- * from S3-backed `/api/comics/.../image` URLs (same mapping as History → Preview).
+ * Loads comic metadata and prefers stored S3/CDN URLs for Preview.
+ * Falls back to authenticated `/api/comics/.../image?token=` only when a slot has no https URL.
  */
 export async function fetchComicPagesForPreview(
   comicId: string,
@@ -44,11 +52,31 @@ export async function fetchComicPagesForPreview(
 
     const buildPagePayload = (page: any, index: number): ComicPreviewPagePayload => {
       const serverPageIndex = index;
-      const panelCount = page.panelCount || 0;
-      const panelImages = Array.from({ length: panelCount }, (_, panelIdx) =>
-        panelImageHref(serverPageIndex, panelIdx)
-      );
-      const imageUrl = panelImageHref(serverPageIndex, -1);
+      const panelCount = Number(page.panelCount) || 0;
+      const rawPanels: string[] = Array.isArray(page.panelImages)
+        ? page.panelImages.map((x: unknown) => (typeof x === "string" ? x.trim() : ""))
+        : [];
+
+      const mainFromPage =
+        storedAssetHttps(page.imageUrl) ||
+        storedAssetHttps(page.imageUri) ||
+        null;
+
+      let panelImages: string[];
+      if (panelCount > 0) {
+        panelImages = Array.from({ length: panelCount }, (_, panelIdx) => {
+          const cell = rawPanels[panelIdx] ?? "";
+          return storedAssetHttps(cell) || panelImageHref(serverPageIndex, panelIdx);
+        });
+      } else {
+        panelImages = [];
+      }
+
+      const imageUrl =
+        mainFromPage ||
+        (panelImages.length > 0 ? panelImages[0]! : null) ||
+        panelImageHref(serverPageIndex, -1);
+
       return {
         pageNumber: page.pageNumber,
         imageUrl,
@@ -67,7 +95,11 @@ export async function fetchComicPagesForPreview(
     const hasMultiPanelFirst = p0 != null && (Number(p0.panelCount) || 0) > 1;
 
     if (hasMultiPanelFirst) {
-      const firstPanelHref = panelImageHref(0, 0);
+      const raw0 = Array.isArray(p0.panelImages)
+        ? p0.panelImages.map((x: unknown) => (typeof x === "string" ? x.trim() : ""))
+        : [];
+      const firstPanelDirect = storedAssetHttps(raw0[0]);
+      const firstPanelHref = firstPanelDirect || panelImageHref(0, 0);
       const firstPanel = Array.isArray(p0.panels) ? p0.panels[0] : undefined;
       const coverRow: ComicPreviewPagePayload = {
         pageNumber: 0,
@@ -80,8 +112,6 @@ export async function fetchComicPagesForPreview(
         serverPageIndex: 0,
         syntheticCover: true,
       };
-      // Avoid two "Cover" headers when the first stored page is already type "cover" but
-      // the full grid is shown on the next row.
       const rest = built.map((row, i) => {
         if (i === 0 && p0.pageType === "cover") {
           return { ...row, pageType: "body" as const };

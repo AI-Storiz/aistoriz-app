@@ -148,7 +148,7 @@ function chunkArray<T>(array: T[], chunkSize: number): T[][] {
 
 // Parallel panel generation settings
 const PARALLEL_BATCH_SIZE = 8; // Generate 8 panels at a time for faster generation
-const BATCH_DELAY_MS = 300; // Small delay between batches to respect rate limits
+const BATCH_DELAY_MS = 250; // Small delay between batches to respect rate limits
 
 function generateVerificationCode(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -670,6 +670,20 @@ interface ComicJob {
 
 const jobsCache = new Map<string, ComicJob>();
 
+function userFacingJobPersistError(err: unknown): string {
+  if (err instanceof ComicS3Error) {
+    if (err.code === "S3_NOT_CONFIGURED") {
+      return "Comic storage is temporarily unavailable. Please try again in a few minutes.";
+    }
+    return "We couldn't upload your comic images. Please try again.";
+  }
+  const msg = err && typeof err === "object" && "message" in err ? String((err as { message: string }).message) : "";
+  if (/S3|PutObject|fetch source image|INGEST_FAILED/i.test(msg)) {
+    return "We couldn't upload your comic images. Please try again.";
+  }
+  return "We couldn't save your comic progress. Please try again.";
+}
+
 async function saveJobToDb(job: ComicJob): Promise<void> {
   try {
     if (job.userId && Array.isArray(job.pages) && job.pages.length > 0) {
@@ -726,7 +740,21 @@ async function saveJobToDb(job: ComicJob): Promise<void> {
     jobsCache.set(job.id, job);
   } catch (error) {
     console.error("Error saving job to database:", error);
+    if (!job.error) {
+      job.error = userFacingJobPersistError(error);
+    }
     jobsCache.set(job.id, job);
+    try {
+      await db
+        .update(comicJobs)
+        .set({
+          error: job.error || null,
+          updatedAt: new Date(),
+        })
+        .where(eq(comicJobs.id, job.id));
+    } catch (persistErr) {
+      console.error("Failed to persist job error to comic_jobs:", persistErr);
+    }
   }
 }
 
@@ -809,6 +837,37 @@ function getActiveReplicateModel(): { modelId: string; name: string } | null {
   return null;
 }
 
+const REMOTE_IMAGE_FETCH_MS = 120_000;
+
+/**
+ * Replicate / SiliconFlow return temporary HTTPS image URLs. By default we pass those through
+ * so the job holds small strings and `ingestComicPagesToS3` does a single fetch+upload to S3.
+ * Set `COMIC_PIPELINE_FETCH_REMOTE_IMAGES_TO_DATA_URI=1` to restore legacy behavior (double fetch, large RAM).
+ */
+async function pipelineImageResultFromRemoteOutputUrl(
+  imageUrl: string,
+  fallbackMimeType: string
+): Promise<string> {
+  const t = (imageUrl || "").trim();
+  if (!t) {
+    return "";
+  }
+  if (process.env.COMIC_PIPELINE_FETCH_REMOTE_IMAGES_TO_DATA_URI === "1") {
+    const imageResponse = await fetch(t, { signal: AbortSignal.timeout(REMOTE_IMAGE_FETCH_MS) });
+    if (!imageResponse.ok) {
+      throw new Error(`Failed to fetch generated image (${imageResponse.status})`);
+    }
+    const buffer = await imageResponse.arrayBuffer();
+    const base64 = Buffer.from(buffer).toString("base64");
+    const contentType = imageResponse.headers.get("content-type") || fallbackMimeType;
+    return `data:${contentType};base64,${base64}`;
+  }
+  if (t.startsWith("https://") || t.startsWith("http://")) {
+    return t;
+  }
+  return t;
+}
+
 async function generateImageWithReplicate(prompt: string, aspectRatio: string = "1:1"): Promise<string> {
   const apiKey = aiSettings.replicate.apiKey;
   if (!apiKey) throw new Error("Replicate API key not configured");
@@ -871,11 +930,7 @@ async function generateImageWithReplicate(prompt: string, aspectRatio: string = 
   if (result.status === "succeeded") {
     const imageUrl = typeof result.output === 'string' ? result.output : result.output?.[0];
     if (imageUrl) {
-      const imageResponse = await fetch(imageUrl);
-      const buffer = await imageResponse.arrayBuffer();
-      const base64 = Buffer.from(buffer).toString("base64");
-      const contentType = imageResponse.headers.get("content-type") || "image/webp";
-      return `data:${contentType};base64,${base64}`;
+      return await pipelineImageResultFromRemoteOutputUrl(imageUrl, "image/webp");
     }
     return "";
   }
@@ -895,11 +950,7 @@ async function generateImageWithReplicate(prompt: string, aspectRatio: string = 
     if (result.status === "succeeded") {
       const imageUrl = typeof result.output === 'string' ? result.output : result.output?.[0];
       if (imageUrl) {
-        const imageResponse = await fetch(imageUrl);
-        const buffer = await imageResponse.arrayBuffer();
-        const base64 = Buffer.from(buffer).toString("base64");
-        const contentType = imageResponse.headers.get("content-type") || "image/webp";
-        return `data:${contentType};base64,${base64}`;
+        return await pipelineImageResultFromRemoteOutputUrl(imageUrl, "image/webp");
       }
       return "";
     }
@@ -953,11 +1004,7 @@ async function generateImageWithKontext(prompt: string, inputImageUrl: string, a
   if (result.status === "succeeded") {
     const imageUrl = typeof result.output === 'string' ? result.output : result.output?.[0];
     if (imageUrl) {
-      const imageResponse = await fetch(imageUrl);
-      const buffer = await imageResponse.arrayBuffer();
-      const base64 = Buffer.from(buffer).toString("base64");
-      const contentType = imageResponse.headers.get("content-type") || "image/webp";
-      return `data:${contentType};base64,${base64}`;
+      return await pipelineImageResultFromRemoteOutputUrl(imageUrl, "image/webp");
     }
     return "";
   }
@@ -977,11 +1024,7 @@ async function generateImageWithKontext(prompt: string, inputImageUrl: string, a
     if (result.status === "succeeded") {
       const imageUrl = typeof result.output === 'string' ? result.output : result.output?.[0];
       if (imageUrl) {
-        const imageResponse = await fetch(imageUrl);
-        const buffer = await imageResponse.arrayBuffer();
-        const base64 = Buffer.from(buffer).toString("base64");
-        const contentType = imageResponse.headers.get("content-type") || "image/webp";
-        return `data:${contentType};base64,${base64}`;
+        return await pipelineImageResultFromRemoteOutputUrl(imageUrl, "image/webp");
       }
       return "";
     }
@@ -1055,12 +1098,7 @@ async function generateImageWithSiliconFlow(
   if (result.images && result.images.length > 0) {
     const imageUrl = result.images[0].url;
     if (imageUrl) {
-      // Download and convert to base64
-      const imageResponse = await fetch(imageUrl);
-      const buffer = await imageResponse.arrayBuffer();
-      const base64 = Buffer.from(buffer).toString("base64");
-      const contentType = imageResponse.headers.get("content-type") || "image/png";
-      return `data:${contentType};base64,${base64}`;
+      return await pipelineImageResultFromRemoteOutputUrl(imageUrl, "image/png");
     }
   }
   
@@ -1068,11 +1106,7 @@ async function generateImageWithSiliconFlow(
   if (result.data && result.data.length > 0) {
     const imageData = result.data[0];
     if (imageData.url) {
-      const imageResponse = await fetch(imageData.url);
-      const buffer = await imageResponse.arrayBuffer();
-      const base64 = Buffer.from(buffer).toString("base64");
-      const contentType = imageResponse.headers.get("content-type") || "image/png";
-      return `data:${contentType};base64,${base64}`;
+      return await pipelineImageResultFromRemoteOutputUrl(imageData.url, "image/png");
     }
     if (imageData.b64_json) {
       return `data:image/png;base64,${imageData.b64_json}`;
@@ -1160,12 +1194,7 @@ Both characters must be clearly visible and match their reference images precise
   if (result.status === "succeeded") {
     const imageUrl = typeof result.output === 'string' ? result.output : result.output?.[0];
     if (imageUrl) {
-      // Download and convert to base64
-      const imageResponse = await fetch(imageUrl);
-      const buffer = await imageResponse.arrayBuffer();
-      const base64 = Buffer.from(buffer).toString("base64");
-      const contentType = imageResponse.headers.get("content-type") || "image/webp";
-      return `data:${contentType};base64,${base64}`;
+      return await pipelineImageResultFromRemoteOutputUrl(imageUrl, "image/webp");
     }
   }
   
@@ -1217,12 +1246,10 @@ async function generateImageWithConsistentCharacter(
   if (result.status === "succeeded") {
     const outputs = result.output;
     if (outputs && outputs.length > 0) {
-      const imageUrl = outputs[0];
-      const imageResponse = await fetch(imageUrl);
-      const buffer = await imageResponse.arrayBuffer();
-      const base64 = Buffer.from(buffer).toString("base64");
-      const contentType = imageResponse.headers.get("content-type") || "image/webp";
-      return `data:${contentType};base64,${base64}`;
+      const raw = outputs[0];
+      if (typeof raw === "string" && raw.trim()) {
+        return await pipelineImageResultFromRemoteOutputUrl(raw, "image/webp");
+      }
     }
     return "";
   }
@@ -1242,12 +1269,10 @@ async function generateImageWithConsistentCharacter(
     if (result.status === "succeeded") {
       const outputs = result.output;
       if (outputs && outputs.length > 0) {
-        const imageUrl = outputs[0];
-        const imageResponse = await fetch(imageUrl);
-        const buffer = await imageResponse.arrayBuffer();
-        const base64 = Buffer.from(buffer).toString("base64");
-        const contentType = imageResponse.headers.get("content-type") || "image/webp";
-        return `data:${contentType};base64,${base64}`;
+        const raw = outputs[0];
+        if (typeof raw === "string" && raw.trim()) {
+          return await pipelineImageResultFromRemoteOutputUrl(raw, "image/webp");
+        }
       }
       return "";
     }
@@ -5240,6 +5265,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         pageType: page.pageType,
         panelCount: page.panelCount || 0,
         hasImageUrl: page.hasImageUrl,
+        imageUrl: page.imageUrl ?? null,
+        imageUri: page.imageUri ?? null,
+        panelImages: page.panelImages ?? [],
         panels: page.panels,
         scenes: page.scenes,
         generationMode: page.generationMode,
@@ -5494,13 +5522,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Job status handler - supports both GET and POST (POST for browser compatibility)
   const handleJobStatus = async (req: Request, res: Response) => {
     const jobId = req.params.jobId as string;
-    const userAgent = req.headers['user-agent'] || 'unknown';
-    const clientIP = req.ip || req.headers['x-forwarded-for'] || 'unknown';
-    console.log(`=== Job status check for ${jobId} from ${clientIP} (${userAgent.substring(0, 50)}) ===`);
+    const verboseJobLog = process.env.JOB_STATUS_DEBUG === "1" || process.env.NODE_ENV !== "production";
+    if (verboseJobLog) {
+      const userAgent = req.headers["user-agent"] || "unknown";
+      const clientIP = req.ip || req.headers["x-forwarded-for"] || "unknown";
+      console.log(`[job] ${jobId} status poll from ${String(clientIP).slice(0, 40)} (${String(userAgent).slice(0, 50)})`);
+    }
     const job = await getJobFromDb(jobId);
 
     if (!job) {
-      console.log(`Job ${jobId} not found in database or cache`);
+      if (verboseJobLog) {
+        console.log(`[job] ${jobId} not found`);
+      }
       return res.status(404).json({ error: "Job not found" });
     }
 
@@ -5522,6 +5555,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         progress: job.progress,
         title: job.title,
         pagesCompleted: job.pages?.length || 0,
+        pagesTotal: job.pagesCount ?? null,
         error: job.error,
       });
     }

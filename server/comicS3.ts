@@ -13,6 +13,38 @@ const UPLOAD_CONCURRENCY = (() => {
 })();
 
 const FETCH_TIMEOUT_MS = 120_000;
+const REMOTE_SOURCE_FETCH_ATTEMPTS = 3;
+const REMOTE_SOURCE_FETCH_RETRY_MS = 500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Fetches a provider image URL with short retries (transient CDN / TLS / 5xx). */
+async function fetchRemoteImageForIngest(url: string): Promise<Response> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= REMOTE_SOURCE_FETCH_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+      if (res.ok) {
+        return res;
+      }
+      if (res.status >= 500 && attempt < REMOTE_SOURCE_FETCH_ATTEMPTS) {
+        await sleep(REMOTE_SOURCE_FETCH_RETRY_MS * attempt);
+        continue;
+      }
+      return res;
+    } catch (e) {
+      lastErr = e;
+      if (attempt < REMOTE_SOURCE_FETCH_ATTEMPTS) {
+        await sleep(REMOTE_SOURCE_FETCH_RETRY_MS * attempt);
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
 
 /** Public base (CDN or S3 virtual-hosted) used in stored URLs — fixed at process start. */
 const PUBLIC_BASE: string = (() => {
@@ -245,7 +277,7 @@ async function uploadComicFieldToS3OrThrow(
     contentType = decoded.contentType;
     ext = decoded.ext;
   } else if (t.startsWith("https://") || t.startsWith("http://")) {
-    const res = await fetch(t, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    const res = await fetchRemoteImageForIngest(t);
     if (!res.ok) {
       throw new ComicS3Error(
         `Failed to fetch source image (${res.status}) for field ${fieldKey}`

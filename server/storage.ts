@@ -385,7 +385,17 @@ export class DatabaseStorage implements IStorage {
     return comics;
   }
 
-  async getUserComicsLightweight(userId: string): Promise<Array<{id: number; title: string; style: string; characterNames: unknown; createdAt: Date}>> {
+  async getUserComicsLightweight(userId: string): Promise<
+    Array<{
+      id: number;
+      title: string;
+      style: string;
+      characterNames: unknown;
+      createdAt: Date;
+      /** First stored page/panel image URL (S3/CDN) for direct client display — no API proxy. */
+      thumbnailAssetUrl: string | null;
+    }>
+  > {
     const comics = await db
       .select({
         id: userComics.id,
@@ -393,11 +403,39 @@ export class DatabaseStorage implements IStorage {
         style: userComics.style,
         characterNames: userComics.characterNames,
         createdAt: userComics.createdAt,
+        thumbnailAssetUrl: sql<string | null>`
+          (
+            SELECT COALESCE(
+              NULLIF(BTRIM(p.val->>'imageUrl'), ''),
+              NULLIF(BTRIM(p.val->>'imageUri'), ''),
+              (
+                SELECT NULLIF(BTRIM(txt), '')
+                FROM jsonb_array_elements_text(COALESCE(p.val->'panelImages', '[]'::jsonb)) AS t(txt)
+                WHERE NULLIF(BTRIM(txt), '') IS NOT NULL
+                LIMIT 1
+              )
+            )
+            FROM jsonb_array_elements(COALESCE(${userComics.pages}, '[]'::jsonb))
+              WITH ORDINALITY AS p(val, ord)
+            WHERE COALESCE(
+              NULLIF(BTRIM(p.val->>'imageUrl'), ''),
+              NULLIF(BTRIM(p.val->>'imageUri'), ''),
+              (
+                SELECT NULLIF(BTRIM(txt2), '')
+                FROM jsonb_array_elements_text(COALESCE(p.val->'panelImages', '[]'::jsonb)) AS t2(txt2)
+                WHERE NULLIF(BTRIM(txt2), '') IS NOT NULL
+                LIMIT 1
+              )
+            ) IS NOT NULL
+            ORDER BY p.ord
+            LIMIT 1
+          )
+        `.as("thumbnailAssetUrl"),
       })
       .from(userComics)
       .where(and(eq(userComics.userId, userId), ne(userComics.isDraft, true)))
       .orderBy(desc(userComics.createdAt));
-    
+
     return comics;
   }
 
@@ -434,7 +472,17 @@ export class DatabaseStorage implements IStorage {
   async getUserComicMetadata(id: number, userId: string): Promise<{
     id: number; userId: string; title: string; style: string;
     characterNames: unknown; createdAt: Date;
-    pagesMetadata: Array<{ pageNumber: number; pageType: string; panelCount: number; panels: any; scenes: any; hasImageUrl: boolean }>;
+    pagesMetadata: Array<{
+      pageNumber: number;
+      pageType: string;
+      panelCount: number;
+      panels: any;
+      scenes: any;
+      hasImageUrl: boolean;
+      imageUrl?: string | null;
+      imageUri?: string | null;
+      panelImages?: string[] | null;
+    }>;
   } | undefined> {
     await this.ensureComicPagesNormalized(id, userId);
     const [comic] = await db
@@ -452,6 +500,9 @@ export class DatabaseStorage implements IStorage {
             'panelCount', COALESCE(jsonb_array_length(page->'panelImages'), 0),
             'panels', page->'panels',
             'scenes', page->'scenes',
+            'imageUrl', NULLIF(btrim(coalesce(page->>'imageUrl', '')), ''),
+            'imageUri', NULLIF(btrim(coalesce(page->>'imageUri', '')), ''),
+            'panelImages', COALESCE(page->'panelImages', '[]'::jsonb),
             'hasImageUrl', (
               length(btrim(coalesce(page->>'imageUrl', ''))) > 0
               OR length(btrim(coalesce(page->>'imageUri', ''))) > 0
