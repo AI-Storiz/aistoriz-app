@@ -12,6 +12,7 @@ import { storage } from "./storage";
 import {
   assertComicS3Configured,
   assertPersistedComicPagesAreAssetUrlsOnly,
+  comicPagesNeedS3Ingest,
   comicS3ErrorPayload,
   ComicS3Error,
   ingestComicPagesToS3,
@@ -105,13 +106,22 @@ async function syncJobPagesToS3Library(job: ComicJob, opts?: { publish?: boolean
     return;
   }
   assertComicS3Configured();
-  const ingested = await ingestComicPagesToS3(job.userId, job.libraryComicId, job.pages as unknown[]);
-  const { pages: normalizedPages } = normalizeComicPagesOrder(ingested);
+  const pagesSnapshot = job.pages as unknown[];
+  const needIngest = comicPagesNeedS3Ingest(pagesSnapshot);
+  const ingested = await ingestComicPagesToS3(job.userId, job.libraryComicId, pagesSnapshot);
+  const { pages: normalizedPages, changed: pagesOrderChanged } = normalizeComicPagesOrder(ingested);
+  const titleNow = job.title || "Untitled Comic";
+  const titleAlreadyOnLibraryRow = job.libraryRowTitleSynced === titleNow;
+  if (!needIngest && !pagesOrderChanged && !opts?.publish && titleAlreadyOnLibraryRow) {
+    job.pages = normalizedPages as ComicPage[];
+    return;
+  }
   await storage.updateUserComic(job.libraryComicId, job.userId, {
-    title: job.title || "Untitled Comic",
+    title: titleNow,
     pages: normalizedPages,
     ...(opts?.publish ? { isDraft: false } : {}),
   });
+  job.libraryRowTitleSynced = titleNow;
   job.pages = normalizedPages as ComicPage[];
 }
 
@@ -652,6 +662,8 @@ interface ComicJob {
   savedToLibrary?: boolean;
   /** `user_comics.id` for S3 key prefix and draft/publish lifecycle during generation. */
   libraryComicId?: number;
+  /** Last comic title written to the draft `user_comics` row (in-memory only; avoids redundant DB writes). */
+  libraryRowTitleSynced?: string;
   error?: string;
   createdAt: number;
 }
@@ -680,19 +692,10 @@ async function saveJobToDb(job: ComicJob): Promise<void> {
     if (Array.isArray(job.pages) && job.pages.length > 0) {
       assertPersistedComicPagesAreAssetUrlsOnly(job.pages, `comic_jobs:${job.id}`);
     }
-    const existingJob = await db.select().from(comicJobs).where(eq(comicJobs.id, job.id)).limit(1);
-    if (existingJob.length > 0) {
-      await db.update(comicJobs).set({
-        status: job.status,
-        progress: job.progress,
-        title: job.title || null,
-        pages: job.pages,
-        error: job.error || null,
-        libraryComicId: job.libraryComicId ?? null,
-        updatedAt: new Date(),
-      }).where(eq(comicJobs.id, job.id));
-    } else {
-      await db.insert(comicJobs).values({
+    const now = new Date();
+    await db
+      .insert(comicJobs)
+      .values({
         id: job.id,
         userId: job.userId || null,
         status: job.status,
@@ -703,8 +706,23 @@ async function saveJobToDb(job: ComicJob): Promise<void> {
         pages: job.pages,
         error: job.error || null,
         libraryComicId: job.libraryComicId ?? null,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: comicJobs.id,
+        set: {
+          userId: job.userId || null,
+          status: job.status,
+          progress: job.progress,
+          title: job.title || null,
+          style: job.style || null,
+          pagesCount: job.pagesCount || null,
+          pages: job.pages,
+          error: job.error || null,
+          libraryComicId: job.libraryComicId ?? null,
+          updatedAt: now,
+        },
       });
-    }
     jobsCache.set(job.id, job);
   } catch (error) {
     console.error("Error saving job to database:", error);

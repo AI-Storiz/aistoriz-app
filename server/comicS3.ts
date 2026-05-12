@@ -144,6 +144,39 @@ function isOnOurStorageHttps(url: string): boolean {
   return false;
 }
 
+function mediaReferenceNeedsS3Upload(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && !isOnOurStorageHttps(value);
+}
+
+/**
+ * True when any non-empty image field is not already stored on this app’s S3 / CDN
+ * (still inline `data:`, `http:`, or third-party `https:`).
+ */
+export function comicPagesNeedS3Ingest(pages: unknown): boolean {
+  if (!Array.isArray(pages)) {
+    return false;
+  }
+  for (const raw of pages) {
+    if (raw == null || typeof raw !== "object") {
+      continue;
+    }
+    const o = raw as Record<string, unknown>;
+    if (mediaReferenceNeedsS3Upload(o.imageUrl) || mediaReferenceNeedsS3Upload(o.imageUri)) {
+      return true;
+    }
+    const pan = o.panelImages;
+    if (!Array.isArray(pan)) {
+      continue;
+    }
+    for (const c of pan) {
+      if (mediaReferenceNeedsS3Upload(c)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function extFromContentType(contentType: string | undefined, fallback: string): string {
   if (!contentType) return fallback;
   const c = contentType.toLowerCase().split(";")[0]!.trim();
@@ -468,6 +501,13 @@ export async function ingestComicPagesToS3(
         );
       }
     }
+  }
+
+  if (tasks.length === 0) {
+    for (let pIdx = 0; pIdx < out.length; pIdx++) {
+      assertPageFieldsAreAssetUrls(out[pIdx]!, pIdx);
+    }
+    return out;
   }
 
   await Promise.all(tasks);
