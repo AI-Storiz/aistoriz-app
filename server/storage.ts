@@ -1,6 +1,6 @@
 import { users, creditTransactions, creditSettings, userCharacters, userComics, rateLimitSettings, oauthSettings, generationAuditLogs, referralSettings, referralBounties, referralHistory, internalAds, adImpressions, adSettings, artStyles, artStyleSettings, userUnlockedStyles, pushTokens, notificationPreferences, notificationHistory, notificationSettings, type User, type InsertUser, type CreditTransaction, type CreditSettings, type UserCharacter, type UserComic, type RateLimitSettings, type OAuthSettings, type GenerationAuditLog, type ReferralSettings, type ReferralBounty, type ReferralHistory, type InternalAd, type AdImpression, type AdSettings, type ArtStyle, type ArtStyleSettings, type UserUnlockedStyle, type PushToken, type NotificationPreference, type NotificationHistoryEntry, type NotificationSettings } from "@shared/schema";
 import { db } from "./db";
-import { eq, sql, and, desc, gte } from "drizzle-orm";
+import { eq, sql, and, desc, gte, ne } from "drizzle-orm";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { normalizeComicPagesOrder } from "./comicS3";
@@ -380,7 +380,7 @@ export class DatabaseStorage implements IStorage {
     const comics = await db
       .select()
       .from(userComics)
-      .where(eq(userComics.userId, userId))
+      .where(and(eq(userComics.userId, userId), ne(userComics.isDraft, true)))
       .orderBy(desc(userComics.createdAt));
     return comics;
   }
@@ -395,7 +395,7 @@ export class DatabaseStorage implements IStorage {
         createdAt: userComics.createdAt,
       })
       .from(userComics)
-      .where(eq(userComics.userId, userId))
+      .where(and(eq(userComics.userId, userId), ne(userComics.isDraft, true)))
       .orderBy(desc(userComics.createdAt));
     
     return comics;
@@ -582,7 +582,10 @@ export class DatabaseStorage implements IStorage {
     return this.firstNonEmptyImageFromPages(comic.pages);
   }
 
-  async createUserComic(userId: string, data: { title: string; style: string; characterNames: string[]; pages: any[] }): Promise<UserComic> {
+  async createUserComic(
+    userId: string,
+    data: { title: string; style: string; characterNames: string[]; pages: any[]; isDraft?: boolean }
+  ): Promise<UserComic> {
     const [comic] = await db
       .insert(userComics)
       .values({
@@ -591,15 +594,21 @@ export class DatabaseStorage implements IStorage {
         style: data.style,
         characterNames: data.characterNames,
         pages: data.pages,
+        isDraft: data.isDraft ?? false,
       })
       .returning();
     return comic;
   }
 
-  async updateUserComic(id: number, userId: string, updates: { title?: string; pages?: any[] }): Promise<UserComic | undefined> {
+  async updateUserComic(
+    id: number,
+    userId: string,
+    updates: { title?: string; pages?: any[]; isDraft?: boolean }
+  ): Promise<UserComic | undefined> {
     const updateData: any = { updatedAt: new Date() };
     if (updates.title !== undefined) updateData.title = updates.title;
     if (updates.pages !== undefined) updateData.pages = updates.pages;
+    if (updates.isDraft !== undefined) updateData.isDraft = updates.isDraft;
     
     const [comic] = await db
       .update(userComics)

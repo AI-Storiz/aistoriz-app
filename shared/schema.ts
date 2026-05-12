@@ -136,6 +136,8 @@ export const userComics = pgTable("user_comics", {
   style: text("style").notNull(),
   characterNames: jsonb("character_names").default([]).notNull(),
   pages: jsonb("pages").default([]).notNull(),
+  /** True while a generation job is writing pages to S3; hidden from library lists until published. */
+  isDraft: boolean("is_draft").default(false).notNull(),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });

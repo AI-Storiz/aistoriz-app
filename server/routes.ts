@@ -55,6 +55,7 @@ async function createUserComicS3Only(
     style: data.style,
     characterNames: data.characterNames,
     pages: [],
+    isDraft: false,
   });
   try {
     const ingested = await ingestComicPagesToS3(userId, row.id, data.pages);
@@ -70,6 +71,57 @@ async function createUserComicS3Only(
     });
     throw e;
   }
+}
+
+/**
+ * Hidden draft row used only as the S3 key namespace (`comicId`) while a job runs.
+ * Pages are never persisted on the job row as base64 — they are ingested here first.
+ */
+async function ensureLibraryComicDraftForJob(
+  job: ComicJob,
+  params: { title?: string; style: string; characterNames: string[] }
+): Promise<void> {
+  if (!job.userId || job.libraryComicId != null) {
+    return;
+  }
+  assertComicS3Configured();
+  const row = await storage.createUserComic(job.userId, {
+    title: params.title || job.title || "Untitled Comic",
+    style: params.style || job.style || "Comic",
+    characterNames: params.characterNames,
+    pages: [],
+    isDraft: true,
+  });
+  job.libraryComicId = row.id;
+}
+
+/** Uploads any inline or external image URLs in `job.pages` to S3, updates the draft library row, replaces `job.pages` with HTTPS asset URLs. */
+async function syncJobPagesToS3Library(job: ComicJob, opts?: { publish?: boolean }): Promise<void> {
+  if (!job.userId || job.libraryComicId == null) {
+    return;
+  }
+  if (!Array.isArray(job.pages) || job.pages.length === 0) {
+    return;
+  }
+  assertComicS3Configured();
+  const ingested = await ingestComicPagesToS3(job.userId, job.libraryComicId, job.pages as unknown[]);
+  const { pages: normalizedPages } = normalizeComicPagesOrder(ingested);
+  await storage.updateUserComic(job.libraryComicId, job.userId, {
+    title: job.title || "Untitled Comic",
+    pages: normalizedPages,
+    ...(opts?.publish ? { isDraft: false } : {}),
+  });
+  job.pages = normalizedPages as ComicPage[];
+}
+
+async function discardLibraryComicDraftIfUnused(job: ComicJob): Promise<void> {
+  if (!job.userId || job.libraryComicId == null || job.savedToLibrary) {
+    return;
+  }
+  await storage.deleteUserComic(job.libraryComicId, job.userId).catch(() => {
+    /* best-effort */
+  });
+  job.libraryComicId = undefined;
 }
 
 const JWT_SECRET = process.env.SESSION_SECRET || "fallback-jwt-secret-key";
@@ -607,6 +659,9 @@ const jobsCache = new Map<string, ComicJob>();
 
 async function saveJobToDb(job: ComicJob): Promise<void> {
   try {
+    if (job.userId && job.libraryComicId != null && Array.isArray(job.pages) && job.pages.length > 0) {
+      await syncJobPagesToS3Library(job);
+    }
     const existingJob = await db.select().from(comicJobs).where(eq(comicJobs.id, job.id)).limit(1);
     if (existingJob.length > 0) {
       await db.update(comicJobs).set({
@@ -679,9 +734,15 @@ async function recoverStuckJobs(): Promise<void> {
     if (stuckJobs.length > 0) {
       console.log(`Found ${stuckJobs.length} stuck job(s), marking as failed...`);
       for (const job of stuckJobs) {
+        if (job.userId && job.libraryComicId != null) {
+          await storage.deleteUserComic(job.libraryComicId, job.userId).catch(() => {
+            /* best-effort: draft row may already be gone */
+          });
+        }
         await db.update(comicJobs).set({
           status: "failed",
           error: "Server restarted during generation. Please try again.",
+          libraryComicId: null,
           updatedAt: new Date(),
         }).where(eq(comicJobs.id, job.id));
         console.log(`Marked job ${job.id} as failed (was ${job.progress}% complete)`);
@@ -1659,6 +1720,11 @@ async function processComicJobGeminiFullPage(jobId: string, params: GenerateComi
   try {
     job.status = "processing";
     job.progress = 5;
+    await ensureLibraryComicDraftForJob(job, {
+      title: job.title || title,
+      style: job.style || style,
+      characterNames,
+    });
     await saveJobToDb(job);
 
     const allCharacters = characters || [];
@@ -2325,17 +2391,24 @@ PANEL BORDER RESPECT (CRITICAL — ZERO TOLERANCE):
 
     if (job.userId && !job.savedToLibrary) {
       try {
-        const comic = await createUserComicS3Only(job.userId, {
-          title: job.title || "Untitled Comic",
-          style: job.style || "Comic",
-          characterNames: job.characterNames || [],
-          pages: job.pages,
-        });
-        job.libraryComicId = comic.id;
+        await syncJobPagesToS3Library(job, { publish: true });
         job.savedToLibrary = true;
-        console.log(`Comic auto-saved to library for user ${job.userId}`);
       } catch (saveError) {
-        console.error("Failed to auto-save comic to library:", saveError);
+        console.error("Failed to publish comic draft to library:", saveError);
+        await discardLibraryComicDraftIfUnused(job);
+        try {
+          const comic = await createUserComicS3Only(job.userId, {
+            title: job.title || "Untitled Comic",
+            style: job.style || "Comic",
+            characterNames: job.characterNames || [],
+            pages: job.pages,
+          });
+          job.libraryComicId = comic.id;
+          job.savedToLibrary = true;
+          job.pages = comic.pages as ComicPage[];
+        } catch (fallbackErr) {
+          console.error("Library fallback save also failed:", fallbackErr);
+        }
       }
     }
 
@@ -2354,6 +2427,7 @@ PANEL BORDER RESPECT (CRITICAL — ZERO TOLERANCE):
     console.error("Gemini full-page generation error:", error);
     job.status = "failed";
     job.error = error.message || "Generation failed";
+    await discardLibraryComicDraftIfUnused(job);
     await saveJobToDb(job);
     await refundCreditsForFailedJob(job);
   }
@@ -2495,6 +2569,11 @@ async function processComicJob(jobId: string, params: GenerateComicRequest) {
   try {
     job.status = "processing";
     job.progress = 10;
+    await ensureLibraryComicDraftForJob(job, {
+      title: job.title || title,
+      style: job.style || style,
+      characterNames,
+    });
     await saveJobToDb(job);
 
     // Extract character reference images WITH their names (for proper mapping)
@@ -3667,17 +3746,26 @@ Dramatic professional cover art, eye-catching cinematic composition.`;
     // but savedToLibrary is still false, causing a duplicate save
     if (job.userId && !job.savedToLibrary) {
       try {
-        const comic = await createUserComicS3Only(job.userId, {
-          title: job.title || "Untitled Comic",
-          style: job.style || "Comic",
-          characterNames: job.characterNames || [],
-          pages: job.pages,
-        });
-        job.libraryComicId = comic.id;
+        await syncJobPagesToS3Library(job, { publish: true });
         job.savedToLibrary = true;
         console.log(`Comic auto-saved to library for user ${job.userId}`);
       } catch (saveError) {
-        console.error("Failed to auto-save comic to library:", saveError);
+        console.error("Failed to publish comic draft to library:", saveError);
+        await discardLibraryComicDraftIfUnused(job);
+        try {
+          const comic = await createUserComicS3Only(job.userId, {
+            title: job.title || "Untitled Comic",
+            style: job.style || "Comic",
+            characterNames: job.characterNames || [],
+            pages: job.pages,
+          });
+          job.libraryComicId = comic.id;
+          job.savedToLibrary = true;
+          job.pages = comic.pages as ComicPage[];
+          console.log(`Comic auto-saved via fallback for user ${job.userId}`);
+        } catch (fallbackErr) {
+          console.error("Library fallback save also failed:", fallbackErr);
+        }
       }
     }
 
@@ -3698,6 +3786,7 @@ Dramatic professional cover art, eye-catching cinematic composition.`;
     console.error("Comic generation error:", error);
     job.status = "failed";
     job.error = error.message || "Generation failed";
+    await discardLibraryComicDraftIfUnused(job);
     await saveJobToDb(job);
     await refundCreditsForFailedJob(job);
   }
