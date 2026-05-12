@@ -5015,8 +5015,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Image not found" });
       }
       if (isComicAssetUrl(trimmed)) {
-        res.set("Cache-Control", "public, max-age=3600");
-        return res.redirect(302, trimmed);
+        // Proxy the image instead of redirecting to avoid CORS issues
+        console.log(`[PROXY] Fetching first-image from S3: ${trimmed}`);
+        const imageResponse = await fetch(trimmed);
+        if (!imageResponse.ok) {
+          console.error(`[PROXY] Failed to fetch from S3: ${imageResponse.status}`);
+          return res.status(404).json({ error: "Image not found on S3" });
+        }
+        const imageBuffer = await imageResponse.arrayBuffer();
+        const contentType = imageResponse.headers.get('content-type') || 'image/png';
+
+        console.log(`[PROXY] Successfully proxying image, size: ${imageBuffer.byteLength} bytes, type: ${contentType}`);
+        res.set("Content-Type", contentType);
+        res.set("Cache-Control", "no-cache, no-store, must-revalidate");
+        res.set("Pragma", "no-cache");
+        res.set("Expires", "0");
+        const origin = req.headers.origin || 'http://localhost:8081';
+        res.set("Access-Control-Allow-Origin", origin);
+        res.set("Access-Control-Allow-Credentials", "true");
+        res.set("Access-Control-Allow-Methods", "GET, OPTIONS");
+        res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+        return res.send(Buffer.from(imageBuffer));
       }
       return res.status(400).json({ error: "Invalid comic image URL" });
     } catch (error: any) {
@@ -5032,11 +5051,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const comicId = parseInt(req.params.id as string);
       const pageNum = parseInt(req.params.pageNum as string);
       const panelNum = parseInt(req.params.panelNum as string);
-      
+
       if (isNaN(comicId) || isNaN(pageNum) || isNaN(panelNum)) {
         return res.status(400).json({ error: "Invalid parameters" });
       }
-      
+
       const imageData = await storage.getComicPanelImage(comicId, userId, pageNum, panelNum);
       if (imageData == null) {
         return res.status(404).json({ error: "Image not found" });
@@ -5048,8 +5067,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (isComicAssetUrl(trimmed)) {
-        res.set("Cache-Control", "public, max-age=86400");
-        return res.redirect(302, trimmed);
+        // Proxy the image instead of redirecting to avoid CORS issues
+        console.log(`[PROXY] Fetching panel image from S3: ${trimmed}`);
+        const imageResponse = await fetch(trimmed);
+        if (!imageResponse.ok) {
+          console.error(`[PROXY] Failed to fetch from S3: ${imageResponse.status}`);
+          return res.status(404).json({ error: "Image not found on S3" });
+        }
+        const imageBuffer = await imageResponse.arrayBuffer();
+        const contentType = imageResponse.headers.get('content-type') || 'image/png';
+
+        console.log(`[PROXY] Successfully proxying image, size: ${imageBuffer.byteLength} bytes, type: ${contentType}`);
+        res.set("Content-Type", contentType);
+        res.set("Cache-Control", "no-cache, no-store, must-revalidate");
+        res.set("Pragma", "no-cache");
+        res.set("Expires", "0");
+        const origin = req.headers.origin || 'http://localhost:8081';
+        res.set("Access-Control-Allow-Origin", origin);
+        res.set("Access-Control-Allow-Credentials", "true");
+        res.set("Access-Control-Allow-Methods", "GET, OPTIONS");
+        res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+        return res.send(Buffer.from(imageBuffer));
       }
 
       return res.status(400).json({ error: "Invalid comic image URL" });
