@@ -17,7 +17,7 @@ export interface ComicPreviewPagePayload {
 
 /**
  * Loads comic metadata and builds authenticated image URLs so Preview can render
- * without keeping base64 `data:` payloads in memory (same mapping as History → Preview).
+ * from S3-backed `/api/comics/.../image` URLs (same mapping as History → Preview).
  */
 export async function fetchComicPagesForPreview(
   comicId: string,

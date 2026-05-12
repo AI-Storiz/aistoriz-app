@@ -29,7 +29,6 @@ import { ComicBackground } from "@/components/ComicBackground";
 import { getApiUrl } from "@/lib/query-client";
 import { triggerHistoryRefresh } from "@/store";
 import { fetchComicPagesForPreview } from "@/lib/comicPreviewUrls";
-import { compressComicPages } from "@/lib/imageCompression";
 import type { RootStackParamList } from "@/navigation/RootStackNavigator";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
@@ -509,7 +508,7 @@ export default function GeneratingScreen() {
         let comicIdForPreviewUrls: number | undefined =
           typeof job.libraryComicId === "number" ? job.libraryComicId : undefined;
 
-        // Only client-side save if server didn't already save (fallback)
+        // Only client-side save if server didn't already save (fallback — server ingests to S3)
         if (token && !serverSaved) {
           try {
             const savedPages = job.pages.map((page: any) => ({
@@ -521,10 +520,7 @@ export default function GeneratingScreen() {
               pageType: page.pageType,
             }));
 
-            // Compress images before saving to reduce storage size
-            console.log("Compressing comic images before save (server didn't save)...");
-            const compressedPages = await compressComicPages(savedPages);
-
+            console.log("Saving comic via client fallback (server ingests images to S3)...");
             const saveResponse = await fetch(new URL("/api/comics", getApiUrl()).toString(), {
               method: "POST",
               headers: {
@@ -535,7 +531,7 @@ export default function GeneratingScreen() {
                 title: comicTitle,
                 style: route.params.style || "Comic",
                 characterNames: route.params.characters?.map((c: any) => c.name) || [],
-                pages: compressedPages,
+                pages: savedPages,
               }),
             });
 

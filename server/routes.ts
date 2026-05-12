@@ -11,6 +11,7 @@ import { eq } from "drizzle-orm";
 import { storage } from "./storage";
 import {
   assertComicS3Configured,
+  assertPersistedComicPagesAreAssetUrlsOnly,
   comicS3ErrorPayload,
   ComicS3Error,
   ingestComicPagesToS3,
@@ -75,7 +76,7 @@ async function createUserComicS3Only(
 
 /**
  * Hidden draft row used only as the S3 key namespace (`comicId`) while a job runs.
- * Pages are never persisted on the job row as base64 — they are ingested here first.
+ * Pages are ingested to S3 before any `comic_jobs` row stores image URLs.
  */
 async function ensureLibraryComicDraftForJob(
   job: ComicJob,
@@ -649,7 +650,7 @@ interface ComicJob {
   pages: ComicPage[];
   characterNames?: string[];
   savedToLibrary?: boolean;
-  /** `user_comics.id` after server auto-save; lets the app open Preview without holding base64 in RAM. */
+  /** `user_comics.id` for S3 key prefix and draft/publish lifecycle during generation. */
   libraryComicId?: number;
   error?: string;
   createdAt: number;
@@ -659,8 +660,25 @@ const jobsCache = new Map<string, ComicJob>();
 
 async function saveJobToDb(job: ComicJob): Promise<void> {
   try {
-    if (job.userId && job.libraryComicId != null && Array.isArray(job.pages) && job.pages.length > 0) {
-      await syncJobPagesToS3Library(job);
+    if (job.userId && Array.isArray(job.pages) && job.pages.length > 0) {
+      if (job.libraryComicId == null) {
+        await ensureLibraryComicDraftForJob(job, {
+          title: job.title,
+          style: job.style || "Comic",
+          characterNames: job.characterNames ?? [],
+        });
+      }
+      if (job.libraryComicId != null) {
+        await syncJobPagesToS3Library(job);
+      } else {
+        console.error(
+          `[saveJobToDb] Skipping S3 sync: no libraryComicId after ensure (job=${job.id}, userId=${job.userId}). Not persisting comic_jobs row (would embed inline image data).`
+        );
+        return;
+      }
+    }
+    if (Array.isArray(job.pages) && job.pages.length > 0) {
+      assertPersistedComicPagesAreAssetUrlsOnly(job.pages, `comic_jobs:${job.id}`);
     }
     const existingJob = await db.select().from(comicJobs).where(eq(comicJobs.id, job.id)).limit(1);
     if (existingJob.length > 0) {
@@ -5406,6 +5424,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     console.log(`Deducted ${totalCost} credits from user ${userId}. New balance: ${updatedUser?.credits}`);
 
     const jobId = crypto.randomUUID();
+    const characterNames = (characters || []).map((c) => c.name).filter(Boolean);
     const job: ComicJob = {
       id: jobId,
       userId,
@@ -5415,11 +5434,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       style,
       pagesCount: numPages,
       pages: [],
+      characterNames,
       createdAt: Date.now(),
     };
 
-    // Save job to database for persistence across server restarts
-    await saveJobToDb(job);
+    try {
+      await ensureLibraryComicDraftForJob(job, { title, style, characterNames });
+      await saveJobToDb(job);
+    } catch (jobPersistErr) {
+      console.error("Failed to persist comic job / S3 draft:", jobPersistErr);
+      await storage.updateUserCredits(userId, totalCost);
+      await storage.recordTransaction(
+        userId,
+        totalCost,
+        "comic_generation_refund",
+        "Refund: failed to initialize job (library draft / DB)"
+      );
+      return res.status(500).json({ error: "Could not start comic generation. Your credits were refunded." });
+    }
     console.log(`Job ${jobId} created for user ${userId} and stored in database`);
 
     // Log generation started

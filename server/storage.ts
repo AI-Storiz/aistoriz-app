@@ -3,7 +3,7 @@ import { db } from "./db";
 import { eq, sql, and, desc, gte, ne } from "drizzle-orm";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
-import { normalizeComicPagesOrder } from "./comicS3";
+import { assertPersistedComicPagesAreAssetUrlsOnly, normalizeComicPagesOrder } from "./comicS3";
 
 function generateUserId(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -586,6 +586,9 @@ export class DatabaseStorage implements IStorage {
     userId: string,
     data: { title: string; style: string; characterNames: string[]; pages: any[]; isDraft?: boolean }
   ): Promise<UserComic> {
+    if (Array.isArray(data.pages) && data.pages.length > 0) {
+      assertPersistedComicPagesAreAssetUrlsOnly(data.pages, "user_comics.insert");
+    }
     const [comic] = await db
       .insert(userComics)
       .values({
@@ -605,6 +608,9 @@ export class DatabaseStorage implements IStorage {
     userId: string,
     updates: { title?: string; pages?: any[]; isDraft?: boolean }
   ): Promise<UserComic | undefined> {
+    if (updates.pages !== undefined && Array.isArray(updates.pages) && updates.pages.length > 0) {
+      assertPersistedComicPagesAreAssetUrlsOnly(updates.pages, `user_comics.update:${id}`);
+    }
     const updateData: any = { updatedAt: new Date() };
     if (updates.title !== undefined) updateData.title = updates.title;
     if (updates.pages !== undefined) updateData.pages = updates.pages;

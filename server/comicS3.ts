@@ -329,6 +329,27 @@ function assertPageFieldsAreAssetUrls(page: ComicPageRecord, pageIndex: number):
 }
 
 /**
+ * Enforces that persisted comic JSON never stores `data:` URIs or arbitrary HTTPS URLs —
+ * only empty strings or HTTPS URLs on this app’s configured S3 / CDN origin.
+ * Call immediately before writing `user_comics.pages` or `comic_jobs.pages`.
+ */
+export function assertPersistedComicPagesAreAssetUrlsOnly(pages: unknown, context: string): void {
+  if (pages == null) {
+    return;
+  }
+  if (!Array.isArray(pages)) {
+    throw new ComicS3Error(`${context}: pages must be an array`);
+  }
+  for (let i = 0; i < pages.length; i++) {
+    const raw = pages[i];
+    if (raw == null || typeof raw !== "object") {
+      continue;
+    }
+    assertPageFieldsAreAssetUrls(raw as ComicPageRecord, i);
+  }
+}
+
+/**
  * True when the page has no usable image URL (S3) or panel cells — often a failed cover
  * that was still persisted as the first array element, shifting all real art to [1], [2], …
  */
