@@ -29,7 +29,6 @@ import { ComicBackground } from "@/components/ComicBackground";
 import { getApiUrl } from "@/lib/query-client";
 import { triggerHistoryRefresh } from "@/store";
 import { fetchComicPagesForPreview } from "@/lib/comicPreviewUrls";
-import { compressComicPages } from "@/lib/imageCompression";
 import type { RootStackParamList } from "@/navigation/RootStackNavigator";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
@@ -253,9 +252,28 @@ const LOADING_MESSAGES = [
 ];
 
 const GENERATION_KEEP_AWAKE_TAG = "comic-generation-active";
-const POLL_INTERVAL = 5000; // Poll every 5 seconds
+const POLL_INTERVAL = 4000; // Slightly snappier progress updates without hammering the server
 const FETCH_TIMEOUT = 90000; // 90 second timeout per poll (backend responds fast now with lightweight payloads)
 const MAX_RETRIES = 360; // Retry up to 360 times (30 minutes of polling tolerance for long generations)
+
+const devLog: (...args: unknown[]) => void = __DEV__
+  ? (...args) => {
+      console.log(...args);
+    }
+  : () => {};
+
+/** Prefer server copy; strip noisy technical errors in production. */
+function friendlyJobFailureMessage(raw: string | undefined | null): string {
+  const t = (raw || "").trim();
+  if (!t) return "We couldn't finish your comic. Please try again.";
+  if (
+    t.length > 400 ||
+    /ECONNREFUSED|ENOTFOUND|502|503|504|SyntaxError|Unexpected token|at\s+\w+\s+\(/i.test(t)
+  ) {
+    return "Something went wrong while creating your comic. Please try again.";
+  }
+  return t;
+}
 
 export default function GeneratingScreen() {
   const insets = useSafeAreaInsets();
@@ -274,6 +292,7 @@ export default function GeneratingScreen() {
 
   const [progress, setProgress] = useState(0);
   const [messageIndex, setMessageIndex] = useState(0);
+  const [pagesProgressLabel, setPagesProgressLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(true);
@@ -307,7 +326,7 @@ export default function GeneratingScreen() {
   const handleAppStateChange = async (nextAppState: AppStateStatus) => {
     if (appState.current.match(/inactive|background/) && nextAppState === "active") {
       // App came back to foreground - reset retry counter and resume polling
-      console.log("App returned to foreground, resetting retry counter and resuming polling");
+      devLog("App returned to foreground, resetting retry counter and resuming polling");
       retryCountRef.current = 0;
       
       // Check for saved job and resume polling
@@ -344,11 +363,11 @@ export default function GeneratingScreen() {
       
       const charactersWithImages = preparedCharacters.filter(c => c.imageUri);
       if (charactersWithImages.length > 0) {
-        console.log(`Sending ${charactersWithImages.length} character(s) with reference images for visual consistency`);
+        devLog(`Sending ${charactersWithImages.length} character(s) with reference images for visual consistency`);
       }
 
       const baseUrl = getApiUrl();
-      console.log(`Starting generation with API URL: ${baseUrl}`);
+      devLog(`Starting generation with API URL: ${baseUrl}`);
       
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (token) {
@@ -433,8 +452,8 @@ export default function GeneratingScreen() {
       const url = new URL(`/api/job/${id}?_t=${Date.now()}`, baseUrl).href;
       
       // Log polling attempt for debugging
-      if (retryCountRef.current === 0 || retryCountRef.current % 10 === 0) {
-        console.log(`Polling job ${id} at ${url} (attempt ${retryCountRef.current + 1})`);
+      if (__DEV__ && (retryCountRef.current === 0 || retryCountRef.current % 10 === 0)) {
+        devLog(`Polling job ${id} (attempt ${retryCountRef.current + 1})`);
       }
       
       // Add timeout to prevent hanging
@@ -467,7 +486,7 @@ export default function GeneratingScreen() {
             clearInterval(pollIntervalRef.current);
           }
           // Retry the generation automatically
-          console.log("Job not found, restarting generation...");
+          devLog("Job not found, restarting generation...");
           setTimeout(() => startGeneration(), 1000);
           return;
         }
@@ -477,19 +496,36 @@ export default function GeneratingScreen() {
 
       const job = await response.json();
 
-      console.log(`Job status: ${job.status}, progress: ${job.progress}, pages: ${job.pagesCompleted ?? job.pages?.length ?? 0}`);
-      
+      devLog(
+        `Job status: ${job.status}, progress: ${job.progress}, pages: ${job.pagesCompleted ?? job.pages?.length ?? 0}`
+      );
+
       setProgress(job.progress);
+
+      if (job.status === "processing") {
+        const total =
+          typeof job.pagesTotal === "number" && job.pagesTotal > 0
+            ? job.pagesTotal
+            : route.params.pagesCount;
+        const done = typeof job.pagesCompleted === "number" ? job.pagesCompleted : 0;
+        if (typeof total === "number" && total > 0) {
+          setPagesProgressLabel(`${Math.min(done, total)} of ${total} pages ready`);
+        } else {
+          setPagesProgressLabel(null);
+        }
+      } else {
+        setPagesProgressLabel(null);
+      }
 
       if (job.status === "completed") {
         // Guard against duplicate navigation from multiple poll callbacks
         if (hasNavigatedRef.current) {
-          console.log("Already navigated, skipping duplicate completion");
+          devLog("Already navigated, skipping duplicate completion");
           return;
         }
         hasNavigatedRef.current = true;
-        
-        console.log("Comic generation completed! Saving to history...");
+
+        devLog("Comic generation completed! Saving to history...");
         
         // Stop polling
         if (pollIntervalRef.current) {
@@ -504,12 +540,12 @@ export default function GeneratingScreen() {
 
         // Check if server already auto-saved this comic
         const serverSaved = job.savedToLibrary === true;
-        console.log(`Comic completion - server saved: ${serverSaved}`);
+        devLog(`Comic completion - server saved: ${serverSaved}`);
 
         let comicIdForPreviewUrls: number | undefined =
           typeof job.libraryComicId === "number" ? job.libraryComicId : undefined;
 
-        // Only client-side save if server didn't already save (fallback)
+        // Only client-side save if server didn't already save (fallback — server ingests to S3)
         if (token && !serverSaved) {
           try {
             const savedPages = job.pages.map((page: any) => ({
@@ -521,10 +557,7 @@ export default function GeneratingScreen() {
               pageType: page.pageType,
             }));
 
-            // Compress images before saving to reduce storage size
-            console.log("Compressing comic images before save (server didn't save)...");
-            const compressedPages = await compressComicPages(savedPages);
-
+            devLog("Saving comic via client fallback (server ingests images to S3)...");
             const saveResponse = await fetch(new URL("/api/comics", getApiUrl()).toString(), {
               method: "POST",
               headers: {
@@ -535,12 +568,12 @@ export default function GeneratingScreen() {
                 title: comicTitle,
                 style: route.params.style || "Comic",
                 characterNames: route.params.characters?.map((c: any) => c.name) || [],
-                pages: compressedPages,
+                pages: savedPages,
               }),
             });
 
             if (saveResponse.ok) {
-              console.log("Comic auto-saved to history via client");
+              devLog("Comic auto-saved to history via client");
               try {
                 const body = await saveResponse.json();
                 if (typeof body.comic?.id === "number") {
@@ -574,7 +607,7 @@ export default function GeneratingScreen() {
                 panels: p.panels ?? j.panels,
               };
             });
-            console.log("Preview will use API image URLs (reduced memory vs inline images)");
+            devLog("Preview will use stored comic image URLs (S3/CDN where available)");
           }
         }
 
@@ -591,15 +624,17 @@ export default function GeneratingScreen() {
           title: comicTitle,
         });
       } else if (job.status === "failed") {
-        // Stop polling
         if (pollIntervalRef.current) {
           clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
         }
 
-        // Clear saved job ID
         await AsyncStorage.removeItem("current_job_id");
 
-        throw new Error(job.error || "Generation failed");
+        setError(friendlyJobFailureMessage(job.error));
+        setIsGenerating(false);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        return;
       }
     } catch (err: any) {
       // For network/timeout errors, silently retry without showing error
@@ -611,8 +646,8 @@ export default function GeneratingScreen() {
       
       if (isNetworkError && retryCountRef.current < MAX_RETRIES) {
         retryCountRef.current++;
-        if (retryCountRef.current % 10 === 0) {
-          console.log(`Network retry ${retryCountRef.current}/${MAX_RETRIES}: ${err.message || err.name}`);
+        if (__DEV__ && retryCountRef.current % 10 === 0) {
+          devLog(`Network retry ${retryCountRef.current}/${MAX_RETRIES}: ${err.message || err.name}`);
         }
         return;
       }
@@ -623,7 +658,7 @@ export default function GeneratingScreen() {
         pollIntervalRef.current = null;
       }
       
-      console.log("Retries exhausted, attempting final recovery check...");
+      devLog("Retries exhausted, attempting final recovery check...");
       
       try {
         const savedJobId = await AsyncStorage.getItem("current_job_id");
@@ -644,14 +679,14 @@ export default function GeneratingScreen() {
           
           if (recoveryResponse.ok) {
             const job = await recoveryResponse.json();
-            console.log("Recovery check result:", job.status);
+            devLog("Recovery check result:", job.status);
             
             if (job.status === "completed") {
               retryCountRef.current = 0;
               pollJobStatus(savedJobId);
               return;
             } else if (job.status === "processing") {
-              console.log("Comic still processing, restarting polling...");
+              devLog("Comic still processing, restarting polling...");
               retryCountRef.current = 0;
               startPolling(savedJobId);
               return;
@@ -659,14 +694,17 @@ export default function GeneratingScreen() {
           }
         }
       } catch (recoveryErr) {
-        console.log("Recovery check failed:", recoveryErr);
+        devLog("Recovery check failed:", recoveryErr);
       }
       
       console.error("Poll error after retries:", err.message || err.name, err);
       
-      let errorMessage = "Connection lost during generation. Your comic may still be processing - check History in a few minutes.";
+      let errorMessage =
+        "Connection lost during generation. Your comic may still be processing — check History in a few minutes.";
       if (err.message?.includes("Job not found")) {
         errorMessage = "Your comic session expired. Please create a new comic.";
+      } else if (err.message && err.name !== "AbortError") {
+        errorMessage = friendlyJobFailureMessage(err.message);
       }
       
       setError(errorMessage);
@@ -678,6 +716,7 @@ export default function GeneratingScreen() {
   const handleRetry = async () => {
     setError(null);
     setProgress(0);
+    setPagesProgressLabel(null);
     retryCountRef.current = 0;
     setIsGenerating(true);
     setJobId(null);
@@ -824,6 +863,7 @@ export default function GeneratingScreen() {
           <GlassProgressBar progress={progress} style={currentStyle} />
           <ThemedText type="caption" style={{ color: theme.textSecondary }}>
             {Math.round(progress)}%
+            {pagesProgressLabel ? ` · ${pagesProgressLabel}` : ""}
           </ThemedText>
 
           <ThemedText
