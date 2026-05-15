@@ -3,7 +3,7 @@ import { db } from "./db";
 import { eq, sql, and, desc, gte, ne } from "drizzle-orm";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
-import { normalizeComicPagesOrder } from "./comicS3";
+import { normalizeComicPagesOrder, stripNonAssetImagesFromComicPagesJson } from "./comicS3";
 
 function generateUserId(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -354,7 +354,7 @@ export class DatabaseStorage implements IStorage {
     return character;
   }
 
-  async updateUserCharacter(id: number, userId: string, updates: { name?: string; photoUri?: string }): Promise<UserCharacter | undefined> {
+  async updateUserCharacter(id: number, userId: string, updates: { name?: string; photoUri?: string | null }): Promise<UserCharacter | undefined> {
     const updateData: any = { updatedAt: new Date() };
     if (updates.name !== undefined) updateData.name = updates.name;
     if (updates.photoUri !== undefined) updateData.photoUri = updates.photoUri;
@@ -413,8 +413,10 @@ export class DatabaseStorage implements IStorage {
     if (!row?.pages) {
       return;
     }
-    const { pages: next, changed } = normalizeComicPagesOrder(row.pages as unknown[]);
-    if (changed) {
+    const stripped = stripNonAssetImagesFromComicPagesJson(row.pages as unknown[]);
+    const { pages: next } = normalizeComicPagesOrder(stripped as unknown[]);
+    const unchanged = JSON.stringify(next) === JSON.stringify(row.pages);
+    if (!unchanged) {
       await db
         .update(userComics)
         .set({ pages: next as any, updatedAt: new Date() })

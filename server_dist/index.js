@@ -1,10 +1,4 @@
 var __defProp = Object.defineProperty;
-var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
-  get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
-}) : x)(function(x) {
-  if (typeof require !== "undefined") return require.apply(this, arguments);
-  throw Error('Dynamic require of "' + x + '" is not supported');
-});
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
@@ -80,7 +74,7 @@ var users = pgTable("users", {
   email: text("email").notNull().unique(),
   password: text("password").notNull(),
   userId: text("user_id").notNull().unique(),
-  credits: integer("credits").default(0).notNull(),
+  credits: integer("credits").default(20).notNull(),
   subscriptionStatus: text("subscription_status").default("none").notNull(),
   subscriptionPlan: text("subscription_plan"),
   subscriptionExpiresAt: timestamp("subscription_expires_at"),
@@ -107,12 +101,12 @@ var creditTransactions = pgTable("credit_transactions", {
 });
 var creditSettings = pgTable("credit_settings", {
   id: serial("id").primaryKey(),
-  baseCost: integer("base_cost").default(50).notNull(),
+  baseCost: integer("base_cost").default(20).notNull(),
   costPerPage: integer("cost_per_page").default(15).notNull(),
   adsCreditsReward: integer("ads_credits_reward").default(25).notNull(),
   maxAdsPerDay: integer("max_ads_per_day").default(5).notNull(),
-  weeklyPlanCredits: integer("weekly_plan_credits").default(300).notNull(),
-  weeklyPlanPrice: text("weekly_plan_price").default("6.99").notNull(),
+  weeklyPlanCredits: integer("weekly_plan_credits").default(270).notNull(),
+  weeklyPlanPrice: text("weekly_plan_price").default("7.02").notNull(),
   yearlyPlanCredits: integer("yearly_plan_credits").default(3e3).notNull(),
   yearlyPlanPrice: text("yearly_plan_price").default("69.00").notNull(),
   topUp1Credits: integer("top_up_1_credits").default(100).notNull(),
@@ -173,6 +167,8 @@ var comicJobs = pgTable("comic_jobs", {
   pagesCount: integer("pages_count"),
   pages: jsonb("pages").default([]).notNull(),
   error: text("error"),
+  /** Set when the finished job was persisted to `user_comics` so clients can open Preview with API image URLs. */
+  libraryComicId: integer("library_comic_id"),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull()
 });
@@ -191,6 +187,8 @@ var userComics = pgTable("user_comics", {
   style: text("style").notNull(),
   characterNames: jsonb("character_names").default([]).notNull(),
   pages: jsonb("pages").default([]).notNull(),
+  /** True while a generation job is writing pages to S3; hidden from library lists until published. */
+  isDraft: boolean("is_draft").default(false).notNull(),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull()
 });
@@ -446,8 +444,436 @@ var pool = new Pool({ connectionString: process.env.DATABASE_URL });
 var db = drizzle(pool, { schema: schema_exports });
 
 // server/storage.ts
-import { eq, sql as sql2, and, desc, gte } from "drizzle-orm";
+import { eq, sql as sql2, and, desc, gte, ne } from "drizzle-orm";
 import bcrypt from "bcryptjs";
+
+// server/comicS3.ts
+import { randomBytes } from "node:crypto";
+import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import pLimit from "p-limit";
+var BUCKET = (process.env.COMIC_S3_BUCKET || "").trim();
+var REGION = (process.env.COMIC_S3_REGION || process.env.AWS_REGION || "us-east-1").trim();
+var PREFIX = (process.env.COMIC_S3_KEY_PREFIX || "comic-assets").replace(/^\/+|\/+$/g, "");
+var UPLOAD_CONCURRENCY = (() => {
+  const n = parseInt(process.env.COMIC_S3_CONCURRENCY || "16", 10);
+  if (Number.isNaN(n) || n < 1) return 16;
+  return Math.min(32, n);
+})();
+var FETCH_TIMEOUT_MS = 12e4;
+var PUBLIC_BASE = (() => {
+  const cdn = process.env.COMIC_CDN_BASE_URL?.replace(/\/$/, "");
+  if (cdn) {
+    return cdn;
+  }
+  return `https://${BUCKET}.s3.${REGION}.amazonaws.com`;
+})();
+var ALLOWED_ORIGINS = (() => {
+  const s = /* @__PURE__ */ new Set();
+  if (process.env.COMIC_CDN_BASE_URL) {
+    try {
+      s.add(new URL(process.env.COMIC_CDN_BASE_URL).origin);
+    } catch {
+    }
+  }
+  if (BUCKET) {
+    s.add(`https://${BUCKET}.s3.${REGION}.amazonaws.com`);
+    s.add(`https://${BUCKET}.s3.amazonaws.com`);
+  }
+  return s;
+})();
+var s3 = null;
+function getEnvAwsCredentials() {
+  const id = process.env.AWS_ACCESS_KEY_ID?.trim();
+  const sec = process.env.AWS_SECRET_ACCESS_KEY?.trim();
+  if (id && sec) {
+    return { accessKeyId: id, secretAccessKey: sec };
+  }
+  return void 0;
+}
+function getClient() {
+  if (!s3) {
+    const credentials = getEnvAwsCredentials();
+    s3 = new S3Client(
+      credentials ? { region: REGION, credentials } : { region: REGION }
+    );
+  }
+  return s3;
+}
+var ComicS3Error = class extends Error {
+  constructor(message, code = "INGEST_FAILED", details) {
+    super(message);
+    this.code = code;
+    this.details = details;
+    this.name = "ComicS3Error";
+  }
+};
+function comicS3ErrorPayload(err) {
+  const out = {
+    error: err.message,
+    code: err.code
+  };
+  const expose = err.details && (process.env.COMIC_S3_DEBUG === "1" || process.env.NODE_ENV !== "production");
+  if (expose) {
+    out.details = err.details;
+  }
+  return out;
+}
+function assertComicS3Configured() {
+  if (!BUCKET) {
+    throw new ComicS3Error("COMIC_S3_BUCKET is required", "S3_NOT_CONFIGURED");
+  }
+}
+function publicObjectUrl(key) {
+  return `${PUBLIC_BASE}/${key}`;
+}
+function isComicAssetUrl(url) {
+  const t = (url ?? "").trim();
+  if (t.length === 0) {
+    return true;
+  }
+  try {
+    const u = new URL(t);
+    if (u.protocol !== "https:") {
+      return false;
+    }
+    return ALLOWED_ORIGINS.has(u.origin);
+  } catch {
+    return false;
+  }
+}
+function stripNonAssetImagesFromComicPagesJson(pages) {
+  if (!Array.isArray(pages)) {
+    return [];
+  }
+  return pages.map((raw) => {
+    if (raw == null || typeof raw !== "object") {
+      return raw;
+    }
+    const src = raw;
+    const p = { ...src };
+    for (const key of ["imageUrl", "imageUri"]) {
+      const v = p[key];
+      if (typeof v === "string" && v.trim() && !isComicAssetUrl(v)) {
+        p[key] = "";
+      }
+    }
+    const pan = p.panelImages;
+    if (Array.isArray(pan)) {
+      p.panelImages = pan.map(
+        (cell) => typeof cell === "string" && cell.trim() && !isComicAssetUrl(cell) ? "" : cell
+      );
+    }
+    return p;
+  });
+}
+async function uploadCharacterPhotoToS3OrThrow(userId, imageData) {
+  assertComicS3Configured();
+  const t = (imageData ?? "").trim();
+  if (t.length === 0) {
+    return "";
+  }
+  if (isOnOurStorageHttps(t)) {
+    return t;
+  }
+  const subPath = `photo-${randomBytes(10).toString("hex")}`;
+  let body;
+  let contentType;
+  let ext;
+  if (t.startsWith("data:")) {
+    const decoded = bufferFromDataUri(t);
+    body = decoded.buffer;
+    contentType = decoded.contentType;
+    ext = decoded.ext;
+  } else if (t.startsWith("https://") || t.startsWith("http://")) {
+    const res = await fetch(t, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    if (!res.ok) {
+      throw new ComicS3Error(
+        `Failed to fetch character photo (${res.status})`,
+        "INGEST_FAILED"
+      );
+    }
+    body = Buffer.from(await res.arrayBuffer());
+    contentType = res.headers.get("content-type") || "image/png";
+    ext = extFromContentType(contentType, "png");
+  } else {
+    throw new ComicS3Error("Invalid character photo: expected data or http(s) URL", "INGEST_FAILED");
+  }
+  if (body.length === 0) {
+    throw new ComicS3Error("Empty character photo body", "INGEST_FAILED");
+  }
+  const key = `${PREFIX}/character-photos/${userId}/${subPath}.${ext}`;
+  await putS3ObjectOrThrow(
+    key,
+    body,
+    contentType,
+    "public, max-age=31536000, immutable"
+  );
+  return publicObjectUrl(key);
+}
+function isOnOurStorageHttps(url) {
+  const t = url.trim();
+  if (t.length === 0) {
+    return true;
+  }
+  if (!t.startsWith("https://")) {
+    return false;
+  }
+  for (const origin of ALLOWED_ORIGINS) {
+    if (t === origin || t.startsWith(origin + "/")) {
+      return true;
+    }
+  }
+  return false;
+}
+function extFromContentType(contentType, fallback) {
+  if (!contentType) return fallback;
+  const c = contentType.toLowerCase().split(";")[0].trim();
+  if (c === "image/jpeg" || c === "image/jpg") return "jpg";
+  if (c === "image/png") return "png";
+  if (c === "image/webp") return "webp";
+  if (c === "image/gif") return "gif";
+  return fallback;
+}
+function bufferFromDataUri(dataUri) {
+  const m = dataUri.trim().match(/^data:image\/([\w.+-]+);base64,([\s\S]*)$/i);
+  if (!m) {
+    throw new ComicS3Error("Invalid data URI (expected data:image/...;base64,)");
+  }
+  const subtype = m[1].toLowerCase();
+  const b64 = m[2].replace(/\s/g, "");
+  if (!b64) {
+    throw new ComicS3Error("Empty data URI payload");
+  }
+  const buffer = Buffer.from(b64, "base64");
+  if (buffer.length === 0) {
+    throw new ComicS3Error("Empty decoded image");
+  }
+  const normalized = subtype === "jpg" ? "jpeg" : subtype;
+  const contentType = `image/${normalized}`;
+  return {
+    buffer,
+    contentType,
+    ext: extFromContentType(contentType, "png")
+  };
+}
+async function uploadComicFieldToS3OrThrow(userId, comicId, pageIndex, fieldKey, imageData) {
+  const t = imageData.trim();
+  if (t.length === 0) {
+    return "";
+  }
+  if (isOnOurStorageHttps(t)) {
+    return t;
+  }
+  const subPath = `p${pageIndex}-${fieldKey}-${randomBytes(8).toString("hex")}`;
+  let body;
+  let contentType;
+  let ext;
+  if (t.startsWith("data:")) {
+    const decoded = bufferFromDataUri(t);
+    body = decoded.buffer;
+    contentType = decoded.contentType;
+    ext = decoded.ext;
+  } else if (t.startsWith("https://") || t.startsWith("http://")) {
+    const res = await fetch(t, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    if (!res.ok) {
+      throw new ComicS3Error(
+        `Failed to fetch source image (${res.status}) for field ${fieldKey}`
+      );
+    }
+    body = Buffer.from(await res.arrayBuffer());
+    contentType = res.headers.get("content-type") || "image/png";
+    ext = extFromContentType(contentType, "png");
+  } else {
+    throw new ComicS3Error(`Invalid image for ${fieldKey}: expected data or http(s) URL`);
+  }
+  if (body.length === 0) {
+    throw new ComicS3Error("Empty image body");
+  }
+  const key = `${PREFIX}/${userId}/${comicId}/${subPath}.${ext}`;
+  await putS3ObjectOrThrow(
+    key,
+    body,
+    contentType,
+    "public, max-age=31536000, immutable"
+  );
+  return publicObjectUrl(key);
+}
+async function putS3ObjectOrThrow(key, body, contentType, cacheControl) {
+  try {
+    await getClient().send(
+      new PutObjectCommand({
+        Bucket: BUCKET,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+        CacheControl: cacheControl
+      })
+    );
+  } catch (e) {
+    const name = e && typeof e === "object" && "name" in e ? String(e.name) : "Error";
+    const msg = e && typeof e === "object" && "message" in e ? String(e.message) : String(e);
+    const meta = e && typeof e === "object" && "$metadata" in e ? e.$metadata : void 0;
+    const reqId = meta?.requestId ? ` requestId=${meta.requestId}` : "";
+    const detail = `${name}: ${msg}${reqId}`.trim();
+    console.error(`[comicS3] PutObject failed`, {
+      bucket: BUCKET,
+      key,
+      region: REGION,
+      name,
+      message: msg,
+      httpStatus: meta?.httpStatusCode,
+      requestId: meta?.requestId
+    });
+    throw new ComicS3Error("S3 upload failed", "INGEST_FAILED", detail);
+  }
+}
+var PING_PNG_1X1 = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6X8l8kAAAAASUVORK5CYII=",
+  "base64"
+);
+async function uploadTestPngToS3(userId) {
+  assertComicS3Configured();
+  const t0 = Date.now();
+  const key = `${PREFIX}/_s3_test/${userId}/ping-${t0}.png`;
+  await putS3ObjectOrThrow(key, PING_PNG_1X1, "image/png", "public, max-age=60");
+  return {
+    key,
+    url: publicObjectUrl(key),
+    durationMs: Date.now() - t0,
+    bucket: BUCKET,
+    region: REGION
+  };
+}
+function assertPageFieldsAreAssetUrls(page, pageIndex) {
+  const requireUrl = (field, val) => {
+    if (val == null || val === "") return;
+    if (typeof val !== "string" || !isComicAssetUrl(val)) {
+      throw new ComicS3Error(`Page ${pageIndex} ${field}: expected S3/ CDN https URL after ingest`);
+    }
+  };
+  requireUrl("imageUrl", page.imageUrl);
+  requireUrl("imageUri", page.imageUri);
+  const panels = page.panelImages;
+  if (!Array.isArray(panels)) {
+    return;
+  }
+  for (let i = 0; i < panels.length; i++) {
+    const cell = panels[i];
+    if (cell == null) continue;
+    if (typeof cell !== "string") {
+      throw new ComicS3Error(`Page ${pageIndex} panelImages[${i}]: string URL required`);
+    }
+    if (cell.trim() && !isComicAssetUrl(cell)) {
+      throw new ComicS3Error(`Page ${pageIndex} panelImages[${i}]: S3/ CDN https URL required`);
+    }
+  }
+}
+function comicPageIsImageEmpty(p) {
+  if (p == null || typeof p !== "object") {
+    return true;
+  }
+  const o = p;
+  const str = (v) => typeof v === "string" ? v.trim() : "";
+  if (str(o.imageUrl) || str(o.imageUri)) {
+    return false;
+  }
+  const pan = o.panelImages;
+  if (!Array.isArray(pan)) {
+    return true;
+  }
+  return !pan.some((c) => typeof c === "string" && c.trim().length > 0);
+}
+function normalizeComicPagesOrder(pages) {
+  if (!Array.isArray(pages) || pages.length === 0) {
+    return { pages, changed: false };
+  }
+  const out = [...pages];
+  let stripped = 0;
+  while (out.length > 0 && comicPageIsImageEmpty(out[0])) {
+    out.shift();
+    stripped += 1;
+  }
+  if (stripped === 0) {
+    return { pages, changed: false };
+  }
+  const renumbered = out.map((p, idx) => {
+    if (p == null || typeof p !== "object") {
+      return p;
+    }
+    return { ...p, pageNumber: idx + 1 };
+  });
+  return { pages: renumbered, changed: true };
+}
+async function ingestComicPagesToS3(userId, comicId, pages) {
+  assertComicS3Configured();
+  if (!Array.isArray(pages)) {
+    throw new ComicS3Error("comic `pages` must be an array");
+  }
+  const out = [];
+  for (let pIdx = 0; pIdx < pages.length; pIdx++) {
+    const raw = pages[pIdx];
+    if (raw == null || typeof raw !== "object") {
+      throw new ComicS3Error(`Page ${pIdx} must be an object`);
+    }
+    out.push({ ...raw });
+  }
+  const limit = pLimit(UPLOAD_CONCURRENCY);
+  const tasks = [];
+  for (let pIdx = 0; pIdx < out.length; pIdx++) {
+    const page = out[pIdx];
+    if (typeof page.imageUrl === "string" && page.imageUrl.trim()) {
+      const v = page.imageUrl;
+      tasks.push(
+        limit(async () => {
+          page.imageUrl = await uploadComicFieldToS3OrThrow(userId, comicId, pIdx, "imageUrl", v);
+        })
+      );
+    }
+    if (typeof page.imageUri === "string" && page.imageUri.trim()) {
+      const v = page.imageUri;
+      tasks.push(
+        limit(async () => {
+          page.imageUri = await uploadComicFieldToS3OrThrow(userId, comicId, pIdx, "imageUri", v);
+        })
+      );
+    }
+    const panelImages = page.panelImages;
+    if (Array.isArray(panelImages)) {
+      for (let j = 0; j < panelImages.length; j++) {
+        const cell = panelImages[j];
+        if (cell == null) continue;
+        if (typeof cell !== "string") {
+          throw new ComicS3Error(
+            `Page ${pIdx} panelImages[${j}]: string (data or http(s) URL) required`
+          );
+        }
+        if (!cell.trim()) {
+          continue;
+        }
+        const idx = j;
+        const cellRef = cell;
+        tasks.push(
+          limit(async () => {
+            panelImages[idx] = await uploadComicFieldToS3OrThrow(
+              userId,
+              comicId,
+              pIdx,
+              `panel-${idx}`,
+              cellRef
+            );
+          })
+        );
+      }
+    }
+  }
+  await Promise.all(tasks);
+  for (let pIdx = 0; pIdx < out.length; pIdx++) {
+    assertPageFieldsAreAssetUrls(out[pIdx], pIdx);
+  }
+  return out;
+}
+
+// server/storage.ts
 function generateUserId() {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   let result = "USR-";
@@ -473,7 +899,7 @@ var DatabaseStorage = class {
       email,
       password: hashedPassword,
       userId,
-      credits: 50,
+      credits: 20,
       subscriptionStatus: "none",
       emailVerified: false,
       verificationCode: verificationCode || null,
@@ -668,7 +1094,7 @@ var DatabaseStorage = class {
   }
   // User Comics CRUD
   async getUserComics(userId) {
-    const comics = await db.select().from(userComics).where(eq(userComics.userId, userId)).orderBy(desc(userComics.createdAt));
+    const comics = await db.select().from(userComics).where(and(eq(userComics.userId, userId), ne(userComics.isDraft, true))).orderBy(desc(userComics.createdAt));
     return comics;
   }
   async getUserComicsLightweight(userId) {
@@ -678,14 +1104,32 @@ var DatabaseStorage = class {
       style: userComics.style,
       characterNames: userComics.characterNames,
       createdAt: userComics.createdAt
-    }).from(userComics).where(eq(userComics.userId, userId)).orderBy(desc(userComics.createdAt));
+    }).from(userComics).where(and(eq(userComics.userId, userId), ne(userComics.isDraft, true))).orderBy(desc(userComics.createdAt));
     return comics;
   }
+  /**
+   * Strips leading pages with no images and renumbers pageNumber. Persists when changed
+   * so list metadata, thumbnails, and /page/0/... all match the same array.
+   */
+  async ensureComicPagesNormalized(id, userId) {
+    const [row] = await db.select({ pages: userComics.pages }).from(userComics).where(and(eq(userComics.id, id), eq(userComics.userId, userId)));
+    if (!row?.pages) {
+      return;
+    }
+    const stripped = stripNonAssetImagesFromComicPagesJson(row.pages);
+    const { pages: next, changed } = normalizeComicPagesOrder(stripped);
+    const unchanged = JSON.stringify(next) === JSON.stringify(row.pages);
+    if (!unchanged) {
+      await db.update(userComics).set({ pages: next, updatedAt: /* @__PURE__ */ new Date() }).where(and(eq(userComics.id, id), eq(userComics.userId, userId)));
+    }
+  }
   async getUserComicById(id, userId) {
+    await this.ensureComicPagesNormalized(id, userId);
     const [comic] = await db.select().from(userComics).where(and(eq(userComics.id, id), eq(userComics.userId, userId)));
     return comic;
   }
   async getUserComicMetadata(id, userId) {
+    await this.ensureComicPagesNormalized(id, userId);
     const [comic] = await db.select({
       id: userComics.id,
       userId: userComics.userId,
@@ -700,7 +1144,16 @@ var DatabaseStorage = class {
             'panelCount', COALESCE(jsonb_array_length(page->'panelImages'), 0),
             'panels', page->'panels',
             'scenes', page->'scenes',
-            'hasImageUrl', (page->>'imageUrl' IS NOT NULL OR page->>'imageUri' IS NOT NULL),
+            'hasImageUrl', (
+              length(btrim(coalesce(page->>'imageUrl', ''))) > 0
+              OR length(btrim(coalesce(page->>'imageUri', ''))) > 0
+              OR EXISTS (
+                SELECT 1 FROM jsonb_array_elements_text(
+                  COALESCE(page->'panelImages', '[]'::jsonb)
+                ) AS t(val)
+                WHERE length(btrim(val)) > 0
+              )
+            ),
             'generationMode', page->>'generationMode'
           ))
           FROM jsonb_array_elements(${userComics.pages}) AS page
@@ -717,27 +1170,98 @@ var DatabaseStorage = class {
       pagesMetadata: comic.pagesMetadata || []
     };
   }
+  /**
+   * First non-empty imageUrl / imageUri / panel in array order. Shared by thumbnails and
+   * cover `panel/-1` fallback when slot 0 is blank but a later page has art.
+   */
+  firstNonEmptyImageFromPages(pages) {
+    for (const raw of pages) {
+      if (raw == null || typeof raw !== "object") {
+        continue;
+      }
+      const p = raw;
+      const u = typeof p.imageUrl === "string" ? p.imageUrl.trim() : "";
+      if (u) {
+        return u;
+      }
+      const iu = typeof p.imageUri === "string" ? p.imageUri.trim() : "";
+      if (iu) {
+        return iu;
+      }
+      const pan = p.panelImages;
+      if (Array.isArray(pan)) {
+        for (const cell of pan) {
+          if (typeof cell === "string" && cell.trim()) {
+            return cell.trim();
+          }
+        }
+      }
+    }
+    return null;
+  }
+  /** Resolves the image URL for a panel (`panelIndex === -1` = full-page or first panel fallback). */
   async getComicPanelImage(comicId, userId, pageIndex, panelIndex) {
-    const safePageIdx = Math.max(0, Math.floor(pageIndex));
+    const safePageIdx = Math.max(0, Math.min(512, Math.floor(pageIndex)));
     const safePanelIdx = Math.floor(panelIndex);
-    let sqlQuery;
-    if (safePanelIdx === -1) {
-      sqlQuery = sql2`
-        COALESCE(
-          ${userComics.pages}->${sql2.raw(String(safePageIdx))}->>'imageUrl',
-          ${userComics.pages}->${sql2.raw(String(safePageIdx))}->>'imageUri'
-        )
-      `;
-    } else {
-      sqlQuery = sql2`
-        ${userComics.pages}->${sql2.raw(String(safePageIdx))}->'panelImages'->>${sql2.raw(String(safePanelIdx))}
-      `;
+    const comic = await this.getUserComicById(comicId, userId);
+    if (!comic?.pages || !Array.isArray(comic.pages)) {
+      return null;
     }
-    const [result] = await db.select({ imageData: sqlQuery }).from(userComics).where(and(eq(userComics.id, comicId), eq(userComics.userId, userId)));
-    if (!result?.imageData) {
+    const page = comic.pages[safePageIdx];
+    if (page == null || typeof page !== "object") {
       console.log(`Image not found: comic=${comicId}, page=${safePageIdx}, panel=${safePanelIdx}`);
+      return null;
     }
-    return result?.imageData || null;
+    const p = page;
+    if (safePanelIdx === -1) {
+      const u = typeof p.imageUrl === "string" ? p.imageUrl.trim() : "";
+      if (u) {
+        return u;
+      }
+      const i = typeof p.imageUri === "string" ? p.imageUri.trim() : "";
+      if (i) {
+        return i;
+      }
+      const pan2 = p.panelImages;
+      if (Array.isArray(pan2)) {
+        for (const cell2 of pan2) {
+          if (typeof cell2 === "string" && cell2.trim()) {
+            return cell2.trim();
+          }
+        }
+      }
+      if (safePageIdx === 0) {
+        const fromAny = this.firstNonEmptyImageFromPages(comic.pages);
+        if (fromAny) {
+          return fromAny;
+        }
+      }
+      console.log(`Image not found: comic=${comicId}, page=${safePageIdx}, panel=${safePanelIdx}`);
+      return null;
+    }
+    const pan = p.panelImages;
+    if (!Array.isArray(pan) || safePanelIdx < 0 || safePanelIdx >= pan.length) {
+      console.log(`Image not found: comic=${comicId}, page=${safePageIdx}, panel=${safePanelIdx}`);
+      return null;
+    }
+    const cell = pan[safePanelIdx];
+    const t = typeof cell === "string" && cell.trim() ? cell.trim() : "";
+    if (!t) {
+      console.log(`Image not found: comic=${comicId}, page=${safePageIdx}, panel=${safePanelIdx}`);
+      return null;
+    }
+    return t;
+  }
+  /**
+   * First available image URL in `pages` order (cover may be empty; skips blank slots).
+   * Used for list thumbnails, not a specific page index.
+   */
+  async getComicFirstImageUrl(comicId, userId) {
+    const comic = await this.getUserComicById(comicId, userId);
+    if (!comic?.pages || !Array.isArray(comic.pages)) {
+      return null;
+    }
+    return this.firstNonEmptyImageFromPages(comic.pages);
   }
   async createUserComic(userId, data) {
     const [comic] = await db.insert(userComics).values({
@@ -745,7 +1269,8 @@ var DatabaseStorage = class {
       title: data.title,
       style: data.style,
       characterNames: data.characterNames,
-      pages: data.pages
+      pages: data.pages,
+      isDraft: data.isDraft ?? false
     }).returning();
     return comic;
   }
@@ -753,6 +1278,7 @@ var DatabaseStorage = class {
     const updateData = { updatedAt: /* @__PURE__ */ new Date() };
     if (updates.title !== void 0) updateData.title = updates.title;
     if (updates.pages !== void 0) updateData.pages = updates.pages;
+    if (updates.isDraft !== void 0) updateData.isDraft = updates.isDraft;
     const [comic] = await db.update(userComics).set(updateData).where(and(eq(userComics.id, id), eq(userComics.userId, userId))).returning();
     return comic || void 0;
   }
@@ -1297,7 +1823,7 @@ var storage = new DatabaseStorage();
 
 // server/email.ts
 import { Resend } from "resend";
-var FROM_EMAIL = "info@eggnetwork.io";
+var FROM_EMAIL = process.env.RESEND_FROM_EMAIL || "info@fiocreatives.com";
 function getResendClient() {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) {
@@ -1430,7 +1956,7 @@ async function sendWelcomeEmail(to) {
             </p>
             
             <p style="color: #333; font-size: 16px; line-height: 1.6;">
-              You've received <strong>50 free credits</strong> to get started. Here's what you can do:
+              You've received <strong>20 free credits</strong> to get started. Here's what you can do:
             </p>
             
             <ul style="color: #333; font-size: 16px; line-height: 1.8;">
@@ -1631,6 +2157,106 @@ function getBase64ImageSize(dataUri) {
   } catch {
     return null;
   }
+}
+async function createUserComicS3Only(userId, data) {
+  assertComicS3Configured();
+  const row = await storage.createUserComic(userId, {
+    title: data.title,
+    style: data.style,
+    characterNames: data.characterNames,
+    pages: [],
+    isDraft: false
+  });
+  try {
+    const ingested = await ingestComicPagesToS3(userId, row.id, data.pages);
+    const { pages: normalizedPages } = normalizeComicPagesOrder(ingested);
+    const updated = await storage.updateUserComic(row.id, userId, { pages: normalizedPages });
+    if (!updated) {
+      throw new ComicS3Error("Failed to persist comic pages after S3 ingest");
+    }
+    return updated;
+  } catch (e) {
+    await storage.deleteUserComic(row.id, userId).catch(() => {
+    });
+    throw e;
+  }
+}
+function comicPagesContainNonAssetImages(pages) {
+  if (!Array.isArray(pages)) {
+    return false;
+  }
+  for (const raw of pages) {
+    if (raw == null || typeof raw !== "object") {
+      continue;
+    }
+    const p = raw;
+    const u1 = typeof p.imageUrl === "string" ? p.imageUrl.trim() : "";
+    if (u1 && !isComicAssetUrl(u1)) {
+      return true;
+    }
+    const u2 = typeof p.imageUri === "string" ? p.imageUri.trim() : "";
+    if (u2 && !isComicAssetUrl(u2)) {
+      return true;
+    }
+    const pan = p.panelImages;
+    if (Array.isArray(pan)) {
+      for (const c of pan) {
+        if (typeof c === "string" && c.trim() && !isComicAssetUrl(c)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+async function tryIngestJobPagesToS3BeforeDiscard(job) {
+  if (!job.userId || job.libraryComicId == null || !comicPagesContainNonAssetImages(job.pages)) {
+    return;
+  }
+  try {
+    await syncJobPagesToS3Library(job);
+  } catch (e) {
+    console.error("[comic-job] Failed to ingest pages to S3 before discarding draft:", e);
+  }
+}
+async function ensureLibraryComicDraftForJob(job, params) {
+  if (!job.userId || job.libraryComicId != null) {
+    return;
+  }
+  assertComicS3Configured();
+  const row = await storage.createUserComic(job.userId, {
+    title: params.title || job.title || "Untitled Comic",
+    style: params.style || job.style || "Comic",
+    characterNames: params.characterNames,
+    pages: [],
+    isDraft: true
+  });
+  job.libraryComicId = row.id;
+}
+async function syncJobPagesToS3Library(job, opts) {
+  if (!job.userId || job.libraryComicId == null) {
+    return;
+  }
+  if (!Array.isArray(job.pages) || job.pages.length === 0) {
+    return;
+  }
+  assertComicS3Configured();
+  const ingested = await ingestComicPagesToS3(job.userId, job.libraryComicId, job.pages);
+  const { pages: normalizedPages } = normalizeComicPagesOrder(ingested);
+  await storage.updateUserComic(job.libraryComicId, job.userId, {
+    title: job.title || "Untitled Comic",
+    pages: normalizedPages,
+    ...opts?.publish ? { isDraft: false } : {}
+  });
+  job.pages = normalizedPages;
+}
+async function discardLibraryComicDraftIfUnused(job) {
+  if (!job.userId || job.libraryComicId == null || job.savedToLibrary) {
+    return;
+  }
+  await storage.deleteUserComic(job.libraryComicId, job.userId).catch(() => {
+  });
+  job.libraryComicId = void 0;
 }
 var JWT_SECRET = process.env.SESSION_SECRET || "fallback-jwt-secret-key";
 function chunkArray(array, chunkSize) {
@@ -1995,14 +2621,24 @@ async function generateTextWithProvider(systemPrompt, userPrompt, responseFormat
 var jobsCache = /* @__PURE__ */ new Map();
 async function saveJobToDb(job) {
   try {
+    if (job.userId && Array.isArray(job.pages) && job.pages.length > 0 && comicPagesContainNonAssetImages(job.pages)) {
+      await ensureLibraryComicDraftForJob(job, {
+        title: job.title || "Untitled Comic",
+        style: job.style || "Comic",
+        characterNames: job.characterNames || []
+      });
+      await syncJobPagesToS3Library(job);
+    }
+    const pagesColumn = Array.isArray(job.pages) && job.pages.length > 0 ? stripNonAssetImagesFromComicPagesJson(job.pages) : job.pages;
     const existingJob = await db.select().from(comicJobs).where(eq2(comicJobs.id, job.id)).limit(1);
     if (existingJob.length > 0) {
       await db.update(comicJobs).set({
         status: job.status,
         progress: job.progress,
         title: job.title || null,
-        pages: job.pages,
+        pages: pagesColumn,
         error: job.error || null,
+        libraryComicId: job.libraryComicId ?? null,
         updatedAt: /* @__PURE__ */ new Date()
       }).where(eq2(comicJobs.id, job.id));
     } else {
@@ -2014,10 +2650,12 @@ async function saveJobToDb(job) {
         title: job.title || null,
         style: job.style || null,
         pagesCount: job.pagesCount || null,
-        pages: job.pages,
-        error: job.error || null
+        pages: pagesColumn,
+        error: job.error || null,
+        libraryComicId: job.libraryComicId ?? null
       });
     }
+    job.pages = pagesColumn;
     jobsCache.set(job.id, job);
   } catch (error) {
     console.error("Error saving job to database:", error);
@@ -2040,8 +2678,9 @@ async function getJobFromDb(jobId) {
         title: dbJob.title || void 0,
         style: dbJob.style || void 0,
         pagesCount: dbJob.pagesCount || void 0,
-        pages: dbJob.pages || [],
+        pages: stripNonAssetImagesFromComicPagesJson(dbJob.pages || []),
         error: dbJob.error || void 0,
+        libraryComicId: dbJob.libraryComicId ?? void 0,
         createdAt: new Date(dbJob.createdAt).getTime()
       };
       jobsCache.set(jobId, job);
@@ -2058,9 +2697,15 @@ async function recoverStuckJobs() {
     if (stuckJobs.length > 0) {
       console.log(`Found ${stuckJobs.length} stuck job(s), marking as failed...`);
       for (const job of stuckJobs) {
+        if (job.userId && job.libraryComicId != null) {
+          await storage.deleteUserComic(job.libraryComicId, job.userId).catch(() => {
+          });
+        }
         await db.update(comicJobs).set({
           status: "failed",
           error: "Server restarted during generation. Please try again.",
+          libraryComicId: null,
+          pages: [],
           updatedAt: /* @__PURE__ */ new Date()
         }).where(eq2(comicJobs.id, job.id));
         console.log(`Marked job ${job.id} as failed (was ${job.progress}% complete)`);
@@ -2843,6 +3488,11 @@ async function processComicJobGeminiFullPage(jobId, params) {
   try {
     job.status = "processing";
     job.progress = 5;
+    await ensureLibraryComicDraftForJob(job, {
+      title: job.title || title,
+      style: job.style || style,
+      characterNames
+    });
     await saveJobToDb(job);
     const allCharacters = characters2 || [];
     const charactersWithImages = allCharacters.filter((c) => c.imageUri && (c.imageUri.startsWith("http") || c.imageUri.startsWith("data:"))).map((c) => ({ name: c.name, imageUri: c.imageUri, description: c.description || "" }));
@@ -3435,16 +4085,25 @@ PANEL BORDER RESPECT (CRITICAL \u2014 ZERO TOLERANCE):
     console.log(`Job ${jobId} completed with ${job.pages.length} full pages via Gemini`);
     if (job.userId && !job.savedToLibrary) {
       try {
-        await storage.createUserComic(job.userId, {
-          title: job.title || "Untitled Comic",
-          style: job.style || "Comic",
-          characterNames: job.characterNames || [],
-          pages: job.pages
-        });
+        await syncJobPagesToS3Library(job, { publish: true });
         job.savedToLibrary = true;
-        console.log(`Comic auto-saved to library for user ${job.userId}`);
       } catch (saveError) {
-        console.error("Failed to auto-save comic to library:", saveError);
+        console.error("Failed to publish comic draft to library:", saveError);
+        await tryIngestJobPagesToS3BeforeDiscard(job);
+        await discardLibraryComicDraftIfUnused(job);
+        try {
+          const comic = await createUserComicS3Only(job.userId, {
+            title: job.title || "Untitled Comic",
+            style: job.style || "Comic",
+            characterNames: job.characterNames || [],
+            pages: job.pages
+          });
+          job.libraryComicId = comic.id;
+          job.savedToLibrary = true;
+          job.pages = comic.pages;
+        } catch (fallbackErr) {
+          console.error("Library fallback save also failed:", fallbackErr);
+        }
       }
     }
     job.progress = 100;
@@ -3461,6 +4120,8 @@ PANEL BORDER RESPECT (CRITICAL \u2014 ZERO TOLERANCE):
     console.error("Gemini full-page generation error:", error);
     job.status = "failed";
     job.error = error.message || "Generation failed";
+    await tryIngestJobPagesToS3BeforeDiscard(job);
+    await discardLibraryComicDraftIfUnused(job);
     await saveJobToDb(job);
     await refundCreditsForFailedJob(job);
   }
@@ -3580,6 +4241,11 @@ async function processComicJob(jobId, params) {
   try {
     job.status = "processing";
     job.progress = 10;
+    await ensureLibraryComicDraftForJob(job, {
+      title: job.title || title,
+      style: job.style || style,
+      characterNames
+    });
     await saveJobToDb(job);
     const allCharacters = characters2 || [];
     const charactersWithImages = allCharacters.filter((c) => c.imageUri && (c.imageUri.startsWith("http") || c.imageUri.startsWith("data:"))).map((c) => ({ name: c.name, imageUri: c.imageUri, description: c.description || "" }));
@@ -4498,16 +5164,27 @@ Dramatic professional cover art, eye-catching cinematic composition.`;
     console.log(`Job ${jobId} completed with ${job.pages.length} pages, total panels generated`);
     if (job.userId && !job.savedToLibrary) {
       try {
-        await storage.createUserComic(job.userId, {
-          title: job.title || "Untitled Comic",
-          style: job.style || "Comic",
-          characterNames: job.characterNames || [],
-          pages: job.pages
-        });
+        await syncJobPagesToS3Library(job, { publish: true });
         job.savedToLibrary = true;
         console.log(`Comic auto-saved to library for user ${job.userId}`);
       } catch (saveError) {
-        console.error("Failed to auto-save comic to library:", saveError);
+        console.error("Failed to publish comic draft to library:", saveError);
+        await tryIngestJobPagesToS3BeforeDiscard(job);
+        await discardLibraryComicDraftIfUnused(job);
+        try {
+          const comic = await createUserComicS3Only(job.userId, {
+            title: job.title || "Untitled Comic",
+            style: job.style || "Comic",
+            characterNames: job.characterNames || [],
+            pages: job.pages
+          });
+          job.libraryComicId = comic.id;
+          job.savedToLibrary = true;
+          job.pages = comic.pages;
+          console.log(`Comic auto-saved via fallback for user ${job.userId}`);
+        } catch (fallbackErr) {
+          console.error("Library fallback save also failed:", fallbackErr);
+        }
       }
     }
     job.progress = 100;
@@ -4525,11 +5202,14 @@ Dramatic professional cover art, eye-catching cinematic composition.`;
     console.error("Comic generation error:", error);
     job.status = "failed";
     job.error = error.message || "Generation failed";
+    await tryIngestJobPagesToS3BeforeDiscard(job);
+    await discardLibraryComicDraftIfUnused(job);
     await saveJobToDb(job);
     await refundCreditsForFailedJob(job);
   }
 }
 async function registerRoutes(app2) {
+  assertComicS3Configured();
   storage.seedDefaultArtStyles().catch(console.error);
   if (process.env.NODE_ENV === "production") {
     app2.use((req, res, next) => {
@@ -4765,7 +5445,9 @@ async function registerRoutes(app2) {
           credits: user.credits,
           subscriptionStatus: user.subscriptionStatus,
           subscriptionPlan: user.subscriptionPlan,
-          emailVerified: user.emailVerified
+          emailVerified: user.emailVerified,
+          referralCode: user.referralCode,
+          adsWatchedToday: user.adsWatchedToday
         }
       });
     } catch (error) {
@@ -4797,7 +5479,9 @@ async function registerRoutes(app2) {
           emailVerified: user.emailVerified,
           credits: user.credits,
           subscriptionStatus: user.subscriptionStatus,
-          subscriptionPlan: user.subscriptionPlan
+          subscriptionPlan: user.subscriptionPlan,
+          referralCode: user.referralCode,
+          adsWatchedToday: user.adsWatchedToday
         }
       });
     } catch (error) {
@@ -4864,7 +5548,9 @@ async function registerRoutes(app2) {
           emailVerified: user.emailVerified,
           credits: user.credits,
           subscriptionStatus: user.subscriptionStatus,
-          subscriptionPlan: user.subscriptionPlan
+          subscriptionPlan: user.subscriptionPlan,
+          referralCode: user.referralCode,
+          adsWatchedToday: user.adsWatchedToday
         }
       });
     } catch (error) {
@@ -5131,7 +5817,7 @@ async function registerRoutes(app2) {
       const pagesCount = parseInt(req.query.pages) || 2;
       const settings = await storage.getCreditSettings();
       const baseCost = settings.baseCost;
-      const additionalPages = Math.max(0, pagesCount - 2);
+      const additionalPages = Math.max(0, pagesCount - 1);
       const additionalCost = additionalPages * settings.costPerPage;
       const totalCost = baseCost + additionalCost;
       res.json({
@@ -5155,7 +5841,7 @@ async function registerRoutes(app2) {
       }
       const settings = await storage.getCreditSettings();
       const baseCost = settings.baseCost;
-      const additionalPages = Math.max(0, pagesCount - 2);
+      const additionalPages = Math.max(0, pagesCount - 1);
       const additionalCost = additionalPages * settings.costPerPage;
       const totalCost = baseCost + additionalCost;
       if (user.credits < totalCost) {
@@ -5513,7 +6199,11 @@ async function registerRoutes(app2) {
     try {
       const userId = req.userId;
       const characters2 = await storage.getUserCharacters(userId);
-      res.json({ characters: characters2 });
+      const sanitized = characters2.map((c) => ({
+        ...c,
+        photoUri: typeof c.photoUri === "string" && c.photoUri.trim() && !isComicAssetUrl(c.photoUri.trim()) ? null : c.photoUri
+      }));
+      res.json({ characters: sanitized });
     } catch (error) {
       console.error("Get characters error:", error);
       res.status(500).json({ error: "Failed to get characters" });
@@ -5530,7 +6220,18 @@ async function registerRoutes(app2) {
       if (imgSize !== null && imgSize > MAX_CHARACTER_IMAGE_BYTES) {
         return res.status(400).json({ error: "Character image too large. Maximum size is 5MB." });
       }
-      const character = await storage.createUserCharacter(userId, name, photoUri);
+      let storedPhotoUri;
+      if (typeof photoUri === "string" && photoUri.trim()) {
+        try {
+          storedPhotoUri = await uploadCharacterPhotoToS3OrThrow(userId, photoUri.trim());
+        } catch (e) {
+          if (e instanceof ComicS3Error) {
+            return res.status(e.code === "S3_NOT_CONFIGURED" ? 503 : 422).json(comicS3ErrorPayload(e));
+          }
+          throw e;
+        }
+      }
+      const character = await storage.createUserCharacter(userId, name, storedPhotoUri);
       res.json({ character });
     } catch (error) {
       console.error("Create character error:", error);
@@ -5542,11 +6243,31 @@ async function registerRoutes(app2) {
       const userId = req.userId;
       const characterId = parseInt(req.params.id);
       const { name, photoUri } = req.body;
-      const imgSize = getBase64ImageSize(photoUri);
-      if (imgSize !== null && imgSize > MAX_CHARACTER_IMAGE_BYTES) {
-        return res.status(400).json({ error: "Character image too large. Maximum size is 5MB." });
+      const updates = {};
+      if (name !== void 0) {
+        updates.name = name;
       }
-      const character = await storage.updateUserCharacter(characterId, userId, { name, photoUri });
+      if (photoUri !== void 0) {
+        if (photoUri === null || photoUri === "" || typeof photoUri === "string" && !photoUri.trim()) {
+          updates.photoUri = null;
+        } else if (typeof photoUri === "string") {
+          const imgSize = getBase64ImageSize(photoUri);
+          if (imgSize !== null && imgSize > MAX_CHARACTER_IMAGE_BYTES) {
+            return res.status(400).json({ error: "Character image too large. Maximum size is 5MB." });
+          }
+          try {
+            updates.photoUri = await uploadCharacterPhotoToS3OrThrow(userId, photoUri.trim());
+          } catch (e) {
+            if (e instanceof ComicS3Error) {
+              return res.status(e.code === "S3_NOT_CONFIGURED" ? 503 : 422).json(comicS3ErrorPayload(e));
+            }
+            throw e;
+          }
+        } else {
+          return res.status(400).json({ error: "Invalid photoUri" });
+        }
+      }
+      const character = await storage.updateUserCharacter(characterId, userId, updates);
       if (!character) {
         return res.status(404).json({ error: "Character not found" });
       }
@@ -5570,6 +6291,19 @@ async function registerRoutes(app2) {
       res.status(500).json({ error: "Failed to delete character" });
     }
   });
+  app2.post("/api/test-s3", requireUserAuth, async (req, res) => {
+    try {
+      const userId = req.userId;
+      const result = await uploadTestPngToS3(userId);
+      res.json({ ok: true, ...result });
+    } catch (error) {
+      if (error instanceof ComicS3Error) {
+        return res.status(error.code === "S3_NOT_CONFIGURED" ? 503 : 422).json(comicS3ErrorPayload(error));
+      }
+      console.error("Test S3 error:", error);
+      res.status(500).json({ error: "S3 test failed" });
+    }
+  });
   app2.get("/api/comics", requireUserAuth, async (req, res) => {
     try {
       const userId = req.userId;
@@ -5578,6 +6312,48 @@ async function registerRoutes(app2) {
     } catch (error) {
       console.error("Get comics error:", error);
       res.status(500).json({ error: "Failed to get comics" });
+    }
+  });
+  app2.get("/api/comics/:id/first-image", requireUserAuth, async (req, res) => {
+    try {
+      const userId = req.userId;
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid comic ID" });
+      }
+      const imageData = await storage.getComicFirstImageUrl(id, userId);
+      if (imageData == null) {
+        return res.status(404).json({ error: "Image not found" });
+      }
+      const trimmed = String(imageData).trim();
+      if (!trimmed) {
+        return res.status(404).json({ error: "Image not found" });
+      }
+      if (isComicAssetUrl(trimmed)) {
+        console.log(`[PROXY] Fetching first-image from S3: ${trimmed}`);
+        const imageResponse = await fetch(trimmed);
+        if (!imageResponse.ok) {
+          console.error(`[PROXY] Failed to fetch from S3: ${imageResponse.status}`);
+          return res.status(404).json({ error: "Image not found on S3" });
+        }
+        const imageBuffer = await imageResponse.arrayBuffer();
+        const contentType = imageResponse.headers.get("content-type") || "image/png";
+        console.log(`[PROXY] Successfully proxying image, size: ${imageBuffer.byteLength} bytes, type: ${contentType}`);
+        res.set("Content-Type", contentType);
+        res.set("Cache-Control", "no-cache, no-store, must-revalidate");
+        res.set("Pragma", "no-cache");
+        res.set("Expires", "0");
+        const origin = req.headers.origin || "http://localhost:8081";
+        res.set("Access-Control-Allow-Origin", origin);
+        res.set("Access-Control-Allow-Credentials", "true");
+        res.set("Access-Control-Allow-Methods", "GET, OPTIONS");
+        res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+        return res.send(Buffer.from(imageBuffer));
+      }
+      return res.status(400).json({ error: "Invalid comic image URL" });
+    } catch (error) {
+      console.error("Get first comic image error:", error);
+      res.status(500).json({ error: "Failed to get image" });
     }
   });
   app2.get("/api/comics/:id/page/:pageNum/panel/:panelNum/image", requireUserAuth, async (req, res) => {
@@ -5590,24 +6366,35 @@ async function registerRoutes(app2) {
         return res.status(400).json({ error: "Invalid parameters" });
       }
       const imageData = await storage.getComicPanelImage(comicId, userId, pageNum, panelNum);
-      if (!imageData) {
+      if (imageData == null) {
         return res.status(404).json({ error: "Image not found" });
       }
-      const base64Match = imageData.match(/^data:image\/(png|jpeg|jpg|webp);base64,(.+)$/);
-      if (base64Match) {
-        const mimeType = base64Match[1] === "jpg" ? "jpeg" : base64Match[1];
-        const buffer = Buffer.from(base64Match[2], "base64");
-        const crypto2 = __require("crypto");
-        const etag = crypto2.createHash("md5").update(buffer.slice(0, 1024)).digest("hex");
-        if (req.headers["if-none-match"] === etag) {
-          return res.status(304).end();
-        }
-        res.set("Content-Type", `image/${mimeType}`);
-        res.set("Cache-Control", "public, max-age=604800, immutable");
-        res.set("ETag", etag);
-        return res.send(buffer);
+      const trimmed = String(imageData).trim();
+      if (!trimmed) {
+        return res.status(404).json({ error: "Image not found" });
       }
-      return res.redirect(imageData);
+      if (isComicAssetUrl(trimmed)) {
+        console.log(`[PROXY] Fetching panel image from S3: ${trimmed}`);
+        const imageResponse = await fetch(trimmed);
+        if (!imageResponse.ok) {
+          console.error(`[PROXY] Failed to fetch from S3: ${imageResponse.status}`);
+          return res.status(404).json({ error: "Image not found on S3" });
+        }
+        const imageBuffer = await imageResponse.arrayBuffer();
+        const contentType = imageResponse.headers.get("content-type") || "image/png";
+        console.log(`[PROXY] Successfully proxying image, size: ${imageBuffer.byteLength} bytes, type: ${contentType}`);
+        res.set("Content-Type", contentType);
+        res.set("Cache-Control", "no-cache, no-store, must-revalidate");
+        res.set("Pragma", "no-cache");
+        res.set("Expires", "0");
+        const origin = req.headers.origin || "http://localhost:8081";
+        res.set("Access-Control-Allow-Origin", origin);
+        res.set("Access-Control-Allow-Credentials", "true");
+        res.set("Access-Control-Allow-Methods", "GET, OPTIONS");
+        res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+        return res.send(Buffer.from(imageBuffer));
+      }
+      return res.status(400).json({ error: "Invalid comic image URL" });
     } catch (error) {
       console.error("Get panel image error:", error);
       res.status(500).json({ error: "Failed to get image" });
@@ -5657,7 +6444,7 @@ async function registerRoutes(app2) {
       if (!title || !style || !pages) {
         return res.status(400).json({ error: "Missing required fields" });
       }
-      const comic = await storage.createUserComic(userId, {
+      const comic = await createUserComicS3Only(userId, {
         title,
         style,
         characterNames: characterNames || [],
@@ -5665,6 +6452,9 @@ async function registerRoutes(app2) {
       });
       res.json({ comic });
     } catch (error) {
+      if (error instanceof ComicS3Error) {
+        return res.status(error.code === "S3_NOT_CONFIGURED" ? 503 : 422).json(comicS3ErrorPayload(error));
+      }
       console.error("Save comic error:", error);
       res.status(500).json({ error: "Failed to save comic" });
     }
@@ -5674,12 +6464,31 @@ async function registerRoutes(app2) {
       const userId = req.userId;
       const comicId = parseInt(req.params.id);
       const { title, pages } = req.body;
-      const comic = await storage.updateUserComic(comicId, userId, { title, pages });
+      if (isNaN(comicId)) {
+        return res.status(400).json({ error: "Invalid comic ID" });
+      }
+      const existing = await storage.getUserComicById(comicId, userId);
+      if (!existing) {
+        return res.status(404).json({ error: "Comic not found" });
+      }
+      if (pages !== void 0) {
+        const ingested = await ingestComicPagesToS3(userId, comicId, pages);
+        const { pages: normalizedPages } = normalizeComicPagesOrder(ingested);
+        const comic2 = await storage.updateUserComic(comicId, userId, { title, pages: normalizedPages });
+        if (!comic2) {
+          return res.status(404).json({ error: "Comic not found" });
+        }
+        return res.json({ comic: comic2 });
+      }
+      const comic = await storage.updateUserComic(comicId, userId, { title });
       if (!comic) {
         return res.status(404).json({ error: "Comic not found" });
       }
-      res.json({ comic });
+      return res.json({ comic });
     } catch (error) {
+      if (error instanceof ComicS3Error) {
+        return res.status(error.code === "S3_NOT_CONFIGURED" ? 503 : 422).json(comicS3ErrorPayload(error));
+      }
       console.error("Update comic error:", error);
       res.status(500).json({ error: "Failed to update comic" });
     }
@@ -5815,9 +6624,10 @@ async function registerRoutes(app2) {
         status: job.status,
         progress: job.progress,
         title: job.title,
-        pages: job.pages,
+        pages: stripNonAssetImagesFromComicPagesJson(job.pages),
         error: job.error,
-        savedToLibrary: job.savedToLibrary || false
+        savedToLibrary: job.savedToLibrary || false,
+        libraryComicId: job.libraryComicId
       });
     } else {
       res.json({
@@ -6243,6 +7053,27 @@ import { createProxyMiddleware } from "http-proxy-middleware";
 var app = express();
 var log = console.log;
 var isDev = process.env.NODE_ENV !== "production";
+function isPrivateLanHostname(hostname) {
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return true;
+  }
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(hostname);
+  if (!m) {
+    return false;
+  }
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  if (a === 10) {
+    return true;
+  }
+  if (a === 192 && b === 168) {
+    return true;
+  }
+  if (a === 172 && b >= 16 && b <= 31) {
+    return true;
+  }
+  return false;
+}
 function setupCors(app2) {
   app2.use((req, res, next) => {
     const origin = req.header("origin");
@@ -6258,7 +7089,8 @@ function setupCors(app2) {
     }
     const isReplitDomain = originHostname.endsWith(".replit.dev") || originHostname.endsWith(".repl.co") || originHostname.endsWith(".replit.app");
     const isLocalhost = originHostname === "localhost" || originHostname === "127.0.0.1";
-    if (isReplitDomain || isLocalhost) {
+    const isLanDevOrigin = isDev && isPrivateLanHostname(originHostname);
+    if (isReplitDomain || isLocalhost || isLanDevOrigin) {
       res.header("Access-Control-Allow-Origin", origin);
       res.header(
         "Access-Control-Allow-Methods",
@@ -6451,15 +7283,15 @@ function setupErrorHandler(app2) {
   log("Job recovery check completed");
   configureExpoAndLanding(app);
   setupErrorHandler(app);
-  const port = parseInt(process.env.PORT || "5000", 10);
-  server.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true
-    },
-    () => {
-      log(`express server serving on port ${port}`);
-    }
-  );
+  const port = parseInt(process.env.PORT || "5001", 10);
+  const listenOptions = {
+    port,
+    host: "0.0.0.0"
+  };
+  if (process.platform === "linux") {
+    listenOptions.reusePort = true;
+  }
+  server.listen(listenOptions, () => {
+    log(`express server serving on port ${port}`);
+  });
 })();

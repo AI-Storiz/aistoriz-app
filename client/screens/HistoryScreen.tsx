@@ -220,8 +220,7 @@ export default function HistoryScreen() {
         {showFullLoader ? (
           <Animated.View
             entering={FadeIn.duration(280)}
-            style={styles.loadingOverlay}
-            pointerEvents="auto"
+            style={[styles.loadingOverlay, { pointerEvents: "auto" }]}
             testID="history-loading"
           >
             <LottieView

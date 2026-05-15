@@ -16,6 +16,8 @@ import {
   ingestComicPagesToS3,
   isComicAssetUrl,
   normalizeComicPagesOrder,
+  stripNonAssetImagesFromComicPagesJson,
+  uploadCharacterPhotoToS3OrThrow,
   uploadTestPngToS3,
 } from "./comicS3";
 import { db } from "./db";
@@ -73,9 +75,51 @@ async function createUserComicS3Only(
   }
 }
 
+/** True if any page still has a data URI, remote URL, or other non–app-asset image reference. */
+function comicPagesContainNonAssetImages(pages: unknown): boolean {
+  if (!Array.isArray(pages)) {
+    return false;
+  }
+  for (const raw of pages) {
+    if (raw == null || typeof raw !== "object") {
+      continue;
+    }
+    const p = raw as Record<string, unknown>;
+    const u1 = typeof p.imageUrl === "string" ? p.imageUrl.trim() : "";
+    if (u1 && !isComicAssetUrl(u1)) {
+      return true;
+    }
+    const u2 = typeof p.imageUri === "string" ? p.imageUri.trim() : "";
+    if (u2 && !isComicAssetUrl(u2)) {
+      return true;
+    }
+    const pan = p.panelImages;
+    if (Array.isArray(pan)) {
+      for (const c of pan) {
+        if (typeof c === "string" && c.trim() && !isComicAssetUrl(c)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/** Ingest inline/remote images to S3 while the draft row still exists (e.g. before discard on errors). */
+async function tryIngestJobPagesToS3BeforeDiscard(job: ComicJob): Promise<void> {
+  if (!job.userId || job.libraryComicId == null || !comicPagesContainNonAssetImages(job.pages)) {
+    return;
+  }
+  try {
+    await syncJobPagesToS3Library(job);
+  } catch (e) {
+    console.error("[comic-job] Failed to ingest pages to S3 before discarding draft:", e);
+  }
+}
+
 /**
  * Hidden draft row used only as the S3 key namespace (`comicId`) while a job runs.
- * Pages are never persisted on the job row as base64 — they are ingested here first.
+ * Inline images are ingested to S3 before `comic_jobs.pages` is written when possible.
  */
 async function ensureLibraryComicDraftForJob(
   job: ComicJob,
@@ -659,16 +703,32 @@ const jobsCache = new Map<string, ComicJob>();
 
 async function saveJobToDb(job: ComicJob): Promise<void> {
   try {
-    if (job.userId && job.libraryComicId != null && Array.isArray(job.pages) && job.pages.length > 0) {
+    if (
+      job.userId &&
+      Array.isArray(job.pages) &&
+      job.pages.length > 0 &&
+      comicPagesContainNonAssetImages(job.pages)
+    ) {
+      await ensureLibraryComicDraftForJob(job, {
+        title: job.title || "Untitled Comic",
+        style: job.style || "Comic",
+        characterNames: job.characterNames || [],
+      });
       await syncJobPagesToS3Library(job);
     }
+
+    const pagesColumn: ComicPage[] =
+      Array.isArray(job.pages) && job.pages.length > 0
+        ? (stripNonAssetImagesFromComicPagesJson(job.pages) as ComicPage[])
+        : job.pages;
+
     const existingJob = await db.select().from(comicJobs).where(eq(comicJobs.id, job.id)).limit(1);
     if (existingJob.length > 0) {
       await db.update(comicJobs).set({
         status: job.status,
         progress: job.progress,
         title: job.title || null,
-        pages: job.pages,
+        pages: pagesColumn,
         error: job.error || null,
         libraryComicId: job.libraryComicId ?? null,
         updatedAt: new Date(),
@@ -682,11 +742,12 @@ async function saveJobToDb(job: ComicJob): Promise<void> {
         title: job.title || null,
         style: job.style || null,
         pagesCount: job.pagesCount || null,
-        pages: job.pages,
+        pages: pagesColumn,
         error: job.error || null,
         libraryComicId: job.libraryComicId ?? null,
       });
     }
+    job.pages = pagesColumn;
     jobsCache.set(job.id, job);
   } catch (error) {
     console.error("Error saving job to database:", error);
@@ -711,7 +772,7 @@ async function getJobFromDb(jobId: string): Promise<ComicJob | null> {
         title: dbJob.title || undefined,
         style: dbJob.style || undefined,
         pagesCount: dbJob.pagesCount || undefined,
-        pages: (dbJob.pages || []) as ComicPage[],
+        pages: stripNonAssetImagesFromComicPagesJson(dbJob.pages || []) as ComicPage[],
         error: dbJob.error || undefined,
         libraryComicId: dbJob.libraryComicId ?? undefined,
         createdAt: new Date(dbJob.createdAt).getTime(),
@@ -743,6 +804,7 @@ async function recoverStuckJobs(): Promise<void> {
           status: "failed",
           error: "Server restarted during generation. Please try again.",
           libraryComicId: null,
+          pages: [],
           updatedAt: new Date(),
         }).where(eq(comicJobs.id, job.id));
         console.log(`Marked job ${job.id} as failed (was ${job.progress}% complete)`);
@@ -2395,6 +2457,7 @@ PANEL BORDER RESPECT (CRITICAL — ZERO TOLERANCE):
         job.savedToLibrary = true;
       } catch (saveError) {
         console.error("Failed to publish comic draft to library:", saveError);
+        await tryIngestJobPagesToS3BeforeDiscard(job);
         await discardLibraryComicDraftIfUnused(job);
         try {
           const comic = await createUserComicS3Only(job.userId, {
@@ -2427,6 +2490,7 @@ PANEL BORDER RESPECT (CRITICAL — ZERO TOLERANCE):
     console.error("Gemini full-page generation error:", error);
     job.status = "failed";
     job.error = error.message || "Generation failed";
+    await tryIngestJobPagesToS3BeforeDiscard(job);
     await discardLibraryComicDraftIfUnused(job);
     await saveJobToDb(job);
     await refundCreditsForFailedJob(job);
@@ -3751,6 +3815,7 @@ Dramatic professional cover art, eye-catching cinematic composition.`;
         console.log(`Comic auto-saved to library for user ${job.userId}`);
       } catch (saveError) {
         console.error("Failed to publish comic draft to library:", saveError);
+        await tryIngestJobPagesToS3BeforeDiscard(job);
         await discardLibraryComicDraftIfUnused(job);
         try {
           const comic = await createUserComicS3Only(job.userId, {
@@ -3786,6 +3851,7 @@ Dramatic professional cover art, eye-catching cinematic composition.`;
     console.error("Comic generation error:", error);
     job.status = "failed";
     job.error = error.message || "Generation failed";
+    await tryIngestJobPagesToS3BeforeDiscard(job);
     await discardLibraryComicDraftIfUnused(job);
     await saveJobToDb(job);
     await refundCreditsForFailedJob(job);
@@ -4986,7 +5052,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = (req as any).userId;
       const characters = await storage.getUserCharacters(userId);
-      res.json({ characters });
+      const sanitized = characters.map((c) => ({
+        ...c,
+        photoUri:
+          typeof c.photoUri === "string" &&
+          c.photoUri.trim() &&
+          !isComicAssetUrl(c.photoUri.trim())
+            ? null
+            : c.photoUri,
+      }));
+      res.json({ characters: sanitized });
     } catch (error: any) {
       console.error("Get characters error:", error);
       res.status(500).json({ error: "Failed to get characters" });
@@ -4998,7 +5073,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = (req as any).userId;
       const { name, photoUri } = req.body;
-      
+
       if (!name) {
         return res.status(400).json({ error: "Name is required" });
       }
@@ -5006,8 +5081,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (imgSize !== null && imgSize > MAX_CHARACTER_IMAGE_BYTES) {
         return res.status(400).json({ error: "Character image too large. Maximum size is 5MB." });
       }
-      
-      const character = await storage.createUserCharacter(userId, name, photoUri);
+
+      let storedPhotoUri: string | undefined;
+      if (typeof photoUri === "string" && photoUri.trim()) {
+        try {
+          storedPhotoUri = await uploadCharacterPhotoToS3OrThrow(userId, photoUri.trim());
+        } catch (e) {
+          if (e instanceof ComicS3Error) {
+            return res
+              .status(e.code === "S3_NOT_CONFIGURED" ? 503 : 422)
+              .json(comicS3ErrorPayload(e));
+          }
+          throw e;
+        }
+      }
+
+      const character = await storage.createUserCharacter(userId, name, storedPhotoUri);
       res.json({ character });
     } catch (error: any) {
       console.error("Create character error:", error);
@@ -5021,12 +5110,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = (req as any).userId;
       const characterId = parseInt(req.params.id as string);
       const { name, photoUri } = req.body;
-      const imgSize = getBase64ImageSize(photoUri);
-      if (imgSize !== null && imgSize > MAX_CHARACTER_IMAGE_BYTES) {
-        return res.status(400).json({ error: "Character image too large. Maximum size is 5MB." });
+
+      const updates: { name?: string; photoUri?: string | null } = {};
+      if (name !== undefined) {
+        updates.name = name;
       }
-      
-      const character = await storage.updateUserCharacter(characterId, userId, { name, photoUri });
+      if (photoUri !== undefined) {
+        if (photoUri === null || photoUri === "" || (typeof photoUri === "string" && !photoUri.trim())) {
+          updates.photoUri = null;
+        } else if (typeof photoUri === "string") {
+          const imgSize = getBase64ImageSize(photoUri);
+          if (imgSize !== null && imgSize > MAX_CHARACTER_IMAGE_BYTES) {
+            return res.status(400).json({ error: "Character image too large. Maximum size is 5MB." });
+          }
+          try {
+            updates.photoUri = await uploadCharacterPhotoToS3OrThrow(userId, photoUri.trim());
+          } catch (e) {
+            if (e instanceof ComicS3Error) {
+              return res
+                .status(e.code === "S3_NOT_CONFIGURED" ? 503 : 422)
+                .json(comicS3ErrorPayload(e));
+            }
+            throw e;
+          }
+        } else {
+          return res.status(400).json({ error: "Invalid photoUri" });
+        }
+      }
+
+      const character = await storage.updateUserCharacter(characterId, userId, updates);
       if (!character) {
         return res.status(404).json({ error: "Character not found" });
       }
@@ -5460,7 +5572,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         status: job.status,
         progress: job.progress,
         title: job.title,
-        pages: job.pages,
+        pages: stripNonAssetImagesFromComicPagesJson(job.pages) as ComicPage[],
         error: job.error,
         savedToLibrary: job.savedToLibrary || false,
         libraryComicId: job.libraryComicId,

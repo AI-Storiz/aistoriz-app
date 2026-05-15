@@ -128,6 +128,90 @@ export function isComicAssetUrl(url: string): boolean {
   }
 }
 
+/**
+ * Deep copy of comic `pages` JSON where any image field that is not an app S3/CDN https URL
+ * is replaced with `""` so we never persist or return `data:` URIs or untrusted remote URLs.
+ */
+export function stripNonAssetImagesFromComicPagesJson(pages: unknown): unknown[] {
+  if (!Array.isArray(pages)) {
+    return [];
+  }
+  return pages.map((raw) => {
+    if (raw == null || typeof raw !== "object") {
+      return raw;
+    }
+    const src = raw as Record<string, unknown>;
+    const p = { ...src };
+    for (const key of ["imageUrl", "imageUri"] as const) {
+      const v = p[key];
+      if (typeof v === "string" && v.trim() && !isComicAssetUrl(v)) {
+        p[key] = "";
+      }
+    }
+    const pan = p.panelImages;
+    if (Array.isArray(pan)) {
+      p.panelImages = pan.map((cell) =>
+        typeof cell === "string" && cell.trim() && !isComicAssetUrl(cell) ? "" : cell
+      );
+    }
+    return p;
+  });
+}
+
+/**
+ * Upload a character profile / reference photo (data URI or http(s) URL) to the comic assets bucket.
+ * Returns a public asset URL, or `""` for empty input. Existing app asset URLs are returned unchanged.
+ */
+export async function uploadCharacterPhotoToS3OrThrow(userId: string, imageData: string): Promise<string> {
+  assertComicS3Configured();
+  const t = (imageData ?? "").trim();
+  if (t.length === 0) {
+    return "";
+  }
+  if (isOnOurStorageHttps(t)) {
+    return t;
+  }
+
+  const subPath = `photo-${randomBytes(10).toString("hex")}`;
+
+  let body: Buffer;
+  let contentType: string;
+  let ext: string;
+
+  if (t.startsWith("data:")) {
+    const decoded = bufferFromDataUri(t);
+    body = decoded.buffer;
+    contentType = decoded.contentType;
+    ext = decoded.ext;
+  } else if (t.startsWith("https://") || t.startsWith("http://")) {
+    const res = await fetch(t, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    if (!res.ok) {
+      throw new ComicS3Error(
+        `Failed to fetch character photo (${res.status})`,
+        "INGEST_FAILED"
+      );
+    }
+    body = Buffer.from(await res.arrayBuffer());
+    contentType = res.headers.get("content-type") || "image/png";
+    ext = extFromContentType(contentType, "png");
+  } else {
+    throw new ComicS3Error("Invalid character photo: expected data or http(s) URL", "INGEST_FAILED");
+  }
+
+  if (body.length === 0) {
+    throw new ComicS3Error("Empty character photo body", "INGEST_FAILED");
+  }
+
+  const key = `${PREFIX}/character-photos/${userId}/${subPath}.${ext}`;
+  await putS3ObjectOrThrow(
+    key,
+    body,
+    contentType,
+    "public, max-age=31536000, immutable"
+  );
+  return publicObjectUrl(key);
+}
+
 function isOnOurStorageHttps(url: string): boolean {
   const t = url.trim();
   if (t.length === 0) {
