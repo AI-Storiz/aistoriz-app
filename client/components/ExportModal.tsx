@@ -21,6 +21,7 @@ import {
   exportToJPG,
   downloadToDevice,
   sharePDF,
+  shareZIP,
   getExportDirectory,
 } from "@/lib/exportService";
 
@@ -33,7 +34,7 @@ interface ExportModalProps {
   onError: (message: string) => void;
 }
 
-type ExportAction = "pdf" | "jpg" | "download" | "share-pdf";
+type ExportAction = "pdf" | "jpg" | "download";
 
 interface ExportOption {
   id: ExportAction;
@@ -47,15 +48,15 @@ const exportOptions: ExportOption[] = [
   {
     id: "pdf",
     icon: "file-text",
-    title: "Export as PDF",
+    title: "Share as PDF",
     subtitle: "Multi-page PDF document with speech bubbles",
-    webSupported: false,
+    webSupported: true,
   },
   {
     id: "jpg",
     icon: "image",
-    title: "Export as JPG",
-    subtitle: "Individual page images",
+    title: "Share as JPG",
+    subtitle: "All pages as ZIP file",
     webSupported: true,
   },
   {
@@ -64,13 +65,6 @@ const exportOptions: ExportOption[] = [
     title: "Save to Photos",
     subtitle: "Save to device gallery",
     webSupported: true,
-  },
-  {
-    id: "share-pdf",
-    icon: "share",
-    title: "Share PDF",
-    subtitle: "Share as PDF file",
-    webSupported: false,
   },
 ];
 
@@ -94,16 +88,13 @@ export function ExportModal({
       let result;
       switch (action) {
         case "pdf":
-          result = await exportToPDF(pages, title);
+          result = await sharePDF(pages, title);
           break;
         case "jpg":
-          result = await exportToJPG(pages, title);
+          result = await shareZIP(pages, title);
           break;
         case "download":
           result = await downloadToDevice(pages, title);
-          break;
-        case "share-pdf":
-          result = await sharePDF(pages, title);
           break;
         default:
           result = { success: false, message: "Unknown action" };

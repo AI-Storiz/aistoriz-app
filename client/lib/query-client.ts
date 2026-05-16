@@ -1,6 +1,6 @@
-import { getExpoGoProjectConfig } from "expo";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { Platform } from "react-native";
+import { getMetroLanHostname } from "@/lib/expoDevHost";
 
 /** Must match the server default in `server/index.ts` (PORT or 5001). */
 const DEFAULT_DEV_API_PORT = "5001";
@@ -39,17 +39,9 @@ function rewriteLoopbackForNativeIfNeeded(urlString: string): string {
     return urlString;
   }
   const port = url.port || DEFAULT_DEV_API_PORT;
-  const debuggerHost = getExpoGoProjectConfig()?.debuggerHost;
-  if (debuggerHost) {
-    const devHost = debuggerHost.split(":")[0] ?? "";
-    if (
-      devHost &&
-      devHost !== "127.0.0.1" &&
-      devHost !== "localhost" &&
-      isLikelyLocalDevHost(devHost)
-    ) {
-      return normalizeApiBaseUrl(`http://${devHost}:${port}/`);
-    }
+  const devHost = getMetroLanHostname();
+  if (devHost && isLikelyLocalDevHost(devHost)) {
+    return normalizeApiBaseUrl(`http://${devHost}:${port}/`);
   }
   if (Platform.OS === "android") {
     return normalizeApiBaseUrl(`http://10.0.2.2:${port}/`);
@@ -100,9 +92,9 @@ export function getApiUrl(): string {
     return `${window.location.origin}/`;
   }
 
-  const debuggerHost = getExpoGoProjectConfig()?.debuggerHost;
-  const hostWithPort = debuggerHost
-    ? `${debuggerHost.split(":")[0]}:${DEFAULT_DEV_API_PORT}`
+  const lanHost = getMetroLanHostname();
+  const hostWithPort = lanHost
+    ? `${lanHost}:${DEFAULT_DEV_API_PORT}`
     : Platform.OS === "android"
       ? `10.0.2.2:${DEFAULT_DEV_API_PORT}`
       : `localhost:${DEFAULT_DEV_API_PORT}`;

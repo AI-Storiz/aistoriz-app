@@ -1,5 +1,5 @@
 import * as FileSystem from "expo-file-system/legacy";
-import * as MediaLibrary from "expo-media-library";
+import { isRunningInExpoGo } from "expo";
 import * as Sharing from "expo-sharing";
 import * as Print from "expo-print";
 import { Platform, Alert } from "react-native";
@@ -112,6 +112,36 @@ const normalizeLocalFileUri = (uri: string): string => {
 };
 
 /**
+ * Detect image type from base64 data by checking magic bytes
+ */
+const detectImageTypeFromBase64 = (base64Data: string): string => {
+  const header = base64Data.substring(0, 30);
+
+  // PNG: starts with iVBORw0KGgo (base64 of 89 50 4E 47 0D 0A 1A 0A)
+  if (header.startsWith('iVBORw0KGgo')) {
+    return 'image/png';
+  }
+
+  // JPEG: starts with /9j/ (base64 of FF D8 FF)
+  if (header.startsWith('/9j/')) {
+    return 'image/jpeg';
+  }
+
+  // WebP: starts with UklGR (base64 of RIFF)
+  if (header.startsWith('UklGR')) {
+    return 'image/webp';
+  }
+
+  // GIF: starts with R0lGOD (base64 of GIF89a or GIF87a)
+  if (header.startsWith('R0lGOD')) {
+    return 'image/gif';
+  }
+
+  // Default to PNG since most of our images are PNG
+  return 'image/png';
+};
+
+/**
  * Resolve any supported image reference to a full data:image/...;base64,... URL
  * (correct MIME for http(s) so PDF/WebView rendering is reliable).
  */
@@ -134,7 +164,8 @@ const getImageAsDataUrl = async (imageUrl: string): Promise<string> => {
       encoding: FileSystem.EncodingType.Base64,
     });
     if (!content) throw new Error("Could not read local image file");
-    return `data:image/jpeg;base64,${content}`;
+    const mimeType = detectImageTypeFromBase64(content);
+    return `data:${mimeType};base64,${content}`;
   }
 
   const response = await fetch(trimmed, { headers: buildImageFetchHeaders(trimmed) });
@@ -143,20 +174,56 @@ const getImageAsDataUrl = async (imageUrl: string): Promise<string> => {
   }
 
   const blob = await response.blob();
+
+  // Validate blob is an image before processing
+  if (!blob.type || !blob.type.startsWith('image/')) {
+    console.warn(`Response is not an image type: ${blob.type}, size: ${blob.size}`);
+    // Try to process it anyway, but log the warning
+  }
+
   const dataUrl: string = await new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => {
       const r = reader.result;
-      if (typeof r === "string") resolve(r);
-      else reject(new Error("FileReader did not return a string"));
+      if (typeof r === "string") {
+        console.log(`[Image] FileReader result preview: ${r.substring(0, 50)}...`);
+        resolve(r);
+      } else {
+        reject(new Error("FileReader did not return a string"));
+      }
     };
     reader.onerror = () => reject(reader.error ?? new Error("FileReader failed"));
     reader.readAsDataURL(blob);
   });
 
-  if (!dataUrl.startsWith("data:image") || !dataUrl.includes("base64,")) {
-    throw new Error("Downloaded file was not a recognizable image");
+  // More lenient check - allow various data URL formats
+  if (!dataUrl || dataUrl.trim() === "") {
+    console.error("[Image] FileReader returned empty string");
+    throw new Error("FileReader returned empty data");
   }
+
+  if (!dataUrl.startsWith("data:")) {
+    console.error(`[Image] Data URL doesn't start with 'data:': ${dataUrl.substring(0, 50)}`);
+    throw new Error("Invalid data URL format");
+  }
+
+  if (!dataUrl.includes("base64,") && !dataUrl.includes(";")) {
+    console.error(`[Image] Data URL missing base64 encoding: ${dataUrl.substring(0, 100)}`);
+    throw new Error("Data URL not base64 encoded");
+  }
+
+  // If it's not explicitly an image type, detect from base64 content
+  if (!dataUrl.startsWith("data:image")) {
+    const commaIndex = dataUrl.indexOf(',');
+    if (commaIndex === -1) {
+      throw new Error("Invalid data URL: missing comma separator");
+    }
+    const base64Data = dataUrl.substring(commaIndex + 1);
+    const detectedType = detectImageTypeFromBase64(base64Data);
+    console.log(`[Image] Detected image type from base64: ${detectedType}`);
+    return `data:${detectedType};base64,${base64Data}`;
+  }
+
   return dataUrl;
 };
 
@@ -392,30 +459,44 @@ export const exportToPDF = async (
     }
 
     // Mobile: Generate HTML and use Print API
-    const imageHtmlPromises = pages.map(async (page) => {
+    console.log('[PDF] Starting mobile PDF generation for', pages.length, 'pages');
+    const imageHtmlPromises = pages.map(async (page, index) => {
       const pageLabel = page.pageType === 'cover' ? 'Cover' : page.pageType === 'conclusion' ? 'Conclusion' : `Page ${page.pageNumber}`;
+      console.log(`[PDF] Processing page ${index + 1}/${pages.length}: ${pageLabel}`);
 
       let contentHtml = '';
 
-      const { urls: panelUrls, panels: panelRows } = getPanelImagesForExport(page);
-      if (panelUrls.length > 0) {
-        contentHtml = await generatePanelGridHtml(panelUrls, page.pageType, title, panelRows);
-      } else if (page.imageUrl?.trim()) {
-        const dataUrl = await getImageAsDataUrl(page.imageUrl.trim());
-        const dialogue = page.scenes?.dialogue || "";
-        const bubbleHtml = dialogue ? generateSpeechBubbleHtml(dialogue) : "";
-        contentHtml = `
-          <div style="position: relative; max-width: 100%; max-height: 100%;">
-            <img src="${dataUrl}" style="max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px;" />
-            ${bubbleHtml}
-          </div>
-        `;
+      try {
+        const { urls: panelUrls, panels: panelRows } = getPanelImagesForExport(page);
+        if (panelUrls.length > 0) {
+          console.log(`[PDF] Page ${pageLabel}: Using ${panelUrls.length} panel images`);
+          contentHtml = await generatePanelGridHtml(panelUrls, page.pageType, title, panelRows);
+        } else if (page.imageUrl?.trim()) {
+          console.log(`[PDF] Page ${pageLabel}: Using single image from imageUrl`);
+          const dataUrl = await getImageAsDataUrl(page.imageUrl.trim());
+          console.log(`[PDF] Page ${pageLabel}: Data URL generated, length: ${dataUrl.length}, starts with: ${dataUrl.substring(0, 50)}`);
+
+          const dialogue = page.scenes?.dialogue || "";
+          const bubbleHtml = dialogue ? generateSpeechBubbleHtml(dialogue) : "";
+          contentHtml = `
+            <div style="position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">
+              <img src="${dataUrl}" style="max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px;" alt="Page ${page.pageNumber}" />
+              ${bubbleHtml}
+            </div>
+          `;
+        } else {
+          console.warn(`[PDF] Page ${pageLabel}: No images found!`);
+          contentHtml = '<div style="text-align: center; padding: 50px; color: #999;">No image available</div>';
+        }
+      } catch (error) {
+        console.error(`[PDF] Error processing page ${pageLabel}:`, error);
+        contentHtml = '<div style="text-align: center; padding: 50px; color: #f00;">Error loading image</div>';
       }
 
       return `
-        <div style="page-break-after: always; padding: 15px; box-sizing: border-box; height: 100vh; display: flex; flex-direction: column;">
-          <h2 style="font-family: Arial, sans-serif; margin: 0 0 10px 0; font-size: 14px; color: #666;">${pageLabel}</h2>
-          <div style="flex: 1; overflow: hidden;">
+        <div style="page-break-after: always; padding: 20px; box-sizing: border-box; height: 100vh; display: flex; flex-direction: column;">
+          <h2 style="font-family: Arial, sans-serif; margin: 0 0 15px 0; font-size: 16px; color: #333; font-weight: 600;">${pageLabel}</h2>
+          <div style="flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden;">
             ${contentHtml}
           </div>
         </div>
@@ -423,16 +504,30 @@ export const exportToPDF = async (
     });
 
     const imageHtmlArray = await Promise.all(imageHtmlPromises);
+    console.log('[PDF] All pages processed, generating HTML document');
     const html = `
       <!DOCTYPE html>
       <html>
         <head>
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <meta charset="UTF-8">
           <title>${title}</title>
           <style>
-            @page { margin: 0; size: A4; }
-            body { margin: 0; padding: 0; }
-            * { box-sizing: border-box; }
+            @page {
+              margin: 0;
+              size: A4 portrait;
+            }
+            body {
+              margin: 0;
+              padding: 0;
+              background: white;
+            }
+            * {
+              box-sizing: border-box;
+            }
+            img {
+              display: block;
+            }
           </style>
         </head>
         <body>
@@ -441,11 +536,13 @@ export const exportToPDF = async (
       </html>
     `;
 
+    console.log('[PDF] Calling Print.printToFileAsync...');
     // Mobile: Save PDF to file system
     const { uri } = await Print.printToFileAsync({
       html,
       base64: false,
     });
+    console.log('[PDF] Print.printToFileAsync completed, URI:', uri);
 
     const fileName = `${title.replace(/[^a-zA-Z0-9]/g, "_")}_${Date.now()}.pdf`;
     const exportPath = getExportPath();
@@ -737,6 +834,15 @@ export const downloadToDevice = async (
       return exportToJPG(pages, title);
     }
 
+    if (isRunningInExpoGo() && Platform.OS === "android") {
+      return {
+        success: false,
+        message:
+          "Saving to the gallery is limited in Expo Go on Android. Use Share to export, or install a development build / release APK.",
+      };
+    }
+
+    const MediaLibrary = await import("expo-media-library");
     const { status } = await MediaLibrary.requestPermissionsAsync();
     if (status !== "granted") {
       return {

@@ -11,10 +11,8 @@ import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as WebBrowser from "expo-web-browser";
 import * as Google from "expo-auth-session/providers/google";
-import * as Notifications from "expo-notifications";
-import * as Device from "expo-device";
-import Constants from "expo-constants";
 import { getApiUrl } from "@/lib/query-client";
+import { registerExpoPushToken } from "@/lib/pushNotifications";
 import { clearHistory, store } from "@/store";
 
 WebBrowser.maybeCompleteAuthSession();
@@ -107,7 +105,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
     } catch (error) {
-      console.error("Failed to load OAuth config:", error);
+      if (__DEV__) {
+        console.warn(
+          `[Auth] OAuth config unavailable (${getApiUrl()}). Start the API with npm run server:dev, or set EXPO_PUBLIC_API_URL to your deployed API.`,
+          error,
+        );
+      }
     } finally {
       setOauthConfigLoaded(true);
     }
@@ -150,39 +153,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const registerPushToken = useCallback(async (authToken: string) => {
     try {
-      if (!Device.isDevice) {
-        console.log("Push notifications not available in simulator");
+      const registration = await registerExpoPushToken();
+      if (!registration) {
         return;
       }
-
-      // Skip push notifications in Expo Go (not supported in SDK 53+)
-      const isExpoGo = Constants.appOwnership === "expo";
-      if (isExpoGo && Platform.OS === "android") {
-        console.log("Push notifications not available in Expo Go on Android");
-        return;
-      }
-
-      const { status: existingStatus } = await Notifications.getPermissionsAsync();
-      let finalStatus = existingStatus;
-      
-      if (existingStatus !== "granted") {
-        const { status } = await Notifications.requestPermissionsAsync();
-        finalStatus = status;
-      }
-      
-      if (finalStatus !== "granted") {
-        console.log("Push notification permission not granted");
-        return;
-      }
-
-      const projectId = Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
-      if (!projectId) {
-        console.log("No project ID found for push notifications");
-        return;
-      }
-
-      const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
-      const pushToken = tokenData.data;
 
       await fetch(new URL("/api/notifications/register-token", getApiUrl()).toString(), {
         method: "POST",
@@ -191,14 +165,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           Authorization: `Bearer ${authToken}`,
         },
         body: JSON.stringify({
-          token: pushToken,
-          platform: Platform.OS,
+          token: registration.token,
+          platform: registration.platform,
         }),
       });
-      
-      console.log("Push token registered successfully");
     } catch (error) {
-      console.error("Failed to register push token:", error);
+      if (__DEV__) {
+        console.warn("Failed to register push token:", error);
+      }
     }
   }, []);
 

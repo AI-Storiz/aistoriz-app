@@ -3,7 +3,7 @@ import { db } from "./db";
 import { eq, sql, and, desc, gte, ne } from "drizzle-orm";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
-import { normalizeComicPagesOrder, stripNonAssetImagesFromComicPagesJson } from "./comicS3";
+import { normalizeComicPagesOrder, stripNonAssetImagesFromComicPagesJson, assertPersistedComicPagesAreAssetUrlsOnly } from "./comicS3";
 
 function generateUserId(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";

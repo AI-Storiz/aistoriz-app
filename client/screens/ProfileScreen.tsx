@@ -20,8 +20,10 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import * as Device from "expo-device";
 import * as Linking from "expo-linking";
-import * as Notifications from "expo-notifications";
-import Constants from "expo-constants";
+import {
+  isPushNotificationsSupported,
+  registerExpoPushToken,
+} from "@/lib/pushNotifications";
 import { Feather } from "@expo/vector-icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/query-client";
@@ -173,35 +175,27 @@ export default function ProfileScreen() {
     try {
       if (Platform.OS === "web") return null;
 
-      const isExpoGo = Constants.appOwnership === "expo";
-      if (isExpoGo && Platform.OS === "android") {
-        Alert.alert("Not Available", "Push notifications are not available in Expo Go on Android.");
+      if (!isPushNotificationsSupported()) {
+        Alert.alert(
+          "Not Available",
+          "Push notifications require a development build on Android. Install your release APK or run npx expo run:android.",
+        );
         return null;
       }
 
-      const { status: existingStatus } = await Notifications.getPermissionsAsync();
-      let finalStatus = existingStatus;
-
-      if (existingStatus !== "granted") {
-        const { status } = await Notifications.requestPermissionsAsync();
-        finalStatus = status;
-      }
-
-      if (finalStatus !== "granted") {
+      const registration = await registerExpoPushToken();
+      if (!registration) {
         Alert.alert("Notifications Disabled", "Enable notifications in your device settings.");
         return null;
       }
 
-      const projectId = Constants.expoConfig?.extra?.eas?.projectId;
-      const token = await Notifications.getExpoPushTokenAsync({ projectId });
-
       await registerPushTokenMutation.mutateAsync({
-        token: token.data,
-        platform: Platform.OS,
+        token: registration.token,
+        platform: registration.platform,
         deviceName: Device.deviceName || Device.modelName || undefined,
       });
 
-      return token.data;
+      return registration.token;
     } catch (error) {
       console.error("Error registering for push notifications:", error);
       return null;

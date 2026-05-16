@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback, useLayoutEffect } from "react";
 import {
   View,
   FlatList,
@@ -9,11 +9,11 @@ import {
   Dimensions,
   Modal,
   ActivityIndicator,
+  TouchableOpacity,
   type ListRenderItemInfo,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
-import { HeaderButton } from "@react-navigation/elements";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import * as FileSystem from "expo-file-system/legacy";
@@ -133,40 +133,38 @@ export default function PreviewScreen() {
     [pages]
   );
 
-  const handleGoBack = async () => {
-    await AsyncStorage.setItem("clearCharacterSelection", "true");
-    navigation.goBack();
-  };
-
-  React.useLayoutEffect(() => {
-    navigation.setOptions({
-      headerTitle: isReadOnly ? "" : (title || "Your Comic"),
-      headerLeft: () => (
-        <HeaderButton onPress={handleGoBack}>
-          <View style={styles.backButton}>
-            <Feather name="arrow-left" size={20} color={theme.text} />
-            {isReadOnly && (
-              <ThemedText style={styles.backButtonText}>Back to History</ThemedText>
-            )}
-          </View>
-        </HeaderButton>
-      ),
-      headerRight: () => (
-        <HeaderButton onPress={handleOpenShareModal}>
-          <Feather name="share" size={22} color={theme.primary} />
-        </HeaderButton>
-      ),
-    });
-  }, [navigation, title, isReadOnly, theme.text, theme.primary, theme.textSecondary]);
-
-  const handleOpenShareModal = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    if (pages.length === 0) {
-      Alert.alert("No Pages", "There are no comic pages to share.");
-      return;
+  const handleGoBack = useCallback(async () => {
+    console.log("[PreviewScreen] Back button pressed - EXECUTING NOW");
+    try {
+      await AsyncStorage.setItem("clearCharacterSelection", "true");
+      console.log("[PreviewScreen] Navigation going back...");
+      navigation.goBack();
+    } catch (error) {
+      console.error("[PreviewScreen] Error in goBack:", error);
     }
-    setShowShareModal(true);
-  };
+  }, [navigation]);
+
+  const handleOpenShareModal = useCallback(() => {
+    console.log("[PreviewScreen] Share button pressed - EXECUTING NOW, pages:", pages.length);
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(console.error);
+      if (pages.length === 0) {
+        Alert.alert("No Pages", "There are no comic pages to share.");
+        return;
+      }
+      console.log("[PreviewScreen] Opening share modal...");
+      setShowShareModal(true);
+    } catch (error) {
+      console.error("[PreviewScreen] Error opening share modal:", error);
+    }
+  }, [pages.length]);
+
+  useLayoutEffect(() => {
+    console.log("[PreviewScreen] Setting navigation options - hiding default header");
+    navigation.setOptions({
+      headerShown: false,
+    });
+  }, [navigation]);
 
   const handleDownload = async () => {
     setShareLoading("download");
@@ -484,6 +482,45 @@ export default function PreviewScreen() {
 
   return (
     <ComicBackground>
+      {/* Custom Header */}
+      <View
+        style={[
+          styles.customHeader,
+          {
+            paddingTop: insets.top,
+            backgroundColor: theme.backgroundDefault,
+            borderBottomColor: theme.border,
+          },
+        ]}
+      >
+        <TouchableOpacity
+          onPress={handleGoBack}
+          style={styles.customHeaderLeft}
+          activeOpacity={0.7}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Feather name="arrow-left" size={24} color={theme.text} />
+          {isReadOnly && (
+            <ThemedText style={styles.customHeaderText}>Back to History</ThemedText>
+          )}
+        </TouchableOpacity>
+
+        {!isReadOnly && title && (
+          <ThemedText style={styles.customHeaderTitle} numberOfLines={1}>
+            {title}
+          </ThemedText>
+        )}
+
+        <TouchableOpacity
+          onPress={handleOpenShareModal}
+          style={styles.customHeaderRight}
+          activeOpacity={0.7}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Feather name="download" size={24} color={theme.primary} />
+        </TouchableOpacity>
+      </View>
+
       <FlatList
         data={pages}
         keyExtractor={(item, i) => `page-${item.pageNumber}-${i}`}
@@ -651,6 +688,45 @@ export default function PreviewScreen() {
 }
 
 const styles = StyleSheet.create({
+  customHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+  },
+  customHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    minWidth: 100,
+  },
+  customHeaderText: {
+    fontSize: 16,
+    fontWeight: "500",
+  },
+  customHeaderTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    flex: 1,
+    textAlign: "center",
+    marginHorizontal: 16,
+  },
+  customHeaderRight: {
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    minWidth: 44,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   scrollContent: {
     paddingTop: Spacing.lg,
     paddingHorizontal: Spacing.lg,
@@ -715,10 +791,22 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    paddingRight: 12,
   },
   backButtonText: {
     fontSize: 16,
     fontWeight: "500",
+    marginLeft: 4,
+  },
+  headerShareButton: {
+    padding: 8,
+    paddingHorizontal: 12,
+    minWidth: 44,
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
   },
   titleCard: {
     marginBottom: Spacing.lg,
