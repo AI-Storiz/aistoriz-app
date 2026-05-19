@@ -138,7 +138,17 @@ export default function PreviewScreen() {
     try {
       await AsyncStorage.setItem("clearCharacterSelection", "true");
       console.log("[PreviewScreen] Navigation going back...");
-      navigation.goBack();
+
+      // Check if we can go back (history comics) or need to navigate to home (generated comics)
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+      } else {
+        // Navigate to Main tab when there's no back stack (after generation)
+        navigation.reset({
+          index: 0,
+          routes: [{ name: "Main" }],
+        });
+      }
     } catch (error) {
       console.error("[PreviewScreen] Error in goBack:", error);
     }
