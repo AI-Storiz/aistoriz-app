@@ -1,6 +1,7 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { Platform } from "react-native";
 import { getMetroLanHostname } from "@/lib/expoDevHost";
+import Constants from "expo-constants";
 
 /** Must match the server default in `server/index.ts` (PORT or 5001). */
 const DEFAULT_DEV_API_PORT = "5001";
@@ -52,14 +53,30 @@ function rewriteLoopbackForNativeIfNeeded(urlString: string): string {
 /**
  * Base URL for API `fetch` calls.
  *
- * Prefer `EXPO_PUBLIC_API_URL` in `.env` (inlined by Expo). Example:
- * `https://aistorizapi.fiocreatives.com/`
- *
- * If unset, uses dev heuristics (web: localhost / Replit; native: Expo Go host or emulator).
+ * Priority:
+ * 1. app.json extra.apiUrl (embedded in APK at build time)
+ * 2. EXPO_PUBLIC_API_URL from .env (works in Expo Go development)
+ * 3. Dev heuristics (web: localhost / Replit; native: Expo Go host or emulator)
  */
 export function getApiUrl(): string {
+  // 1. Check app.json extra.apiUrl (works in production APK)
+  const appJsonApiUrl = Constants.expoConfig?.extra?.apiUrl;
+  if (appJsonApiUrl && typeof appJsonApiUrl === "string") {
+    const trimmed = appJsonApiUrl.trim();
+    if (trimmed) {
+      console.log("[getApiUrl] Using app.json extra.apiUrl:", trimmed);
+      try {
+        return normalizeApiBaseUrl(trimmed);
+      } catch {
+        console.warn("[getApiUrl] Invalid app.json extra.apiUrl; continuing to next option.");
+      }
+    }
+  }
+
+  // 2. Check EXPO_PUBLIC_API_URL from .env (works in Expo Go)
   const configured = process.env.EXPO_PUBLIC_API_URL?.trim();
   if (configured) {
+    console.log("[getApiUrl] Using EXPO_PUBLIC_API_URL:", configured);
     try {
       const base = rewriteLoopbackForNativeIfNeeded(
         normalizeApiBaseUrl(configured),
@@ -71,6 +88,9 @@ export function getApiUrl(): string {
       );
     }
   }
+
+  // 3. Dev heuristics (fallback for local development)
+  console.log("[getApiUrl] Using dev heuristics (no apiUrl configured)");
 
   if (typeof window !== "undefined" && window.location) {
     const hostname = window.location.hostname;

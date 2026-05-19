@@ -26,6 +26,8 @@ ios/build/
 !.env.example
 .ai-settings.json
 android/keystore.properties
+android/gradle.properties
+KEYSTORE_INFO.txt
 
 # logs
 *.log

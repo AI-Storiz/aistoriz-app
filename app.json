@@ -78,7 +78,8 @@
     "extra": {
       "eas": {
         "projectId": "7bf43c6b-f0bf-4068-b0b2-6be741707e34"
-      }
+      },
+      "apiUrl": "https://aistorizapi.fiocreatives.com/"
     },
     "owner": "semwaqass-organization"
   }
