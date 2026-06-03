@@ -60,6 +60,25 @@
         display: block;
       }
 
+      .site-footer {
+        margin-top: 40px;
+        padding-top: 24px;
+        border-top: 1px solid #eee;
+        font-size: 14px;
+      }
+      .site-footer a {
+        color: #666;
+        text-decoration: none;
+      }
+      .site-footer a:hover {
+        color: #333;
+        text-decoration: underline;
+      }
+      .footer-sep {
+        color: #ccc;
+        margin: 0 4px;
+      }
+
       .steps-container {
         display: flex;
         flex-direction: column;
@@ -325,6 +344,18 @@
         .open-button:hover {
           background: #e0e0e0;
         }
+        .site-footer {
+          border-top-color: #333;
+        }
+        .site-footer a {
+          color: #888;
+        }
+        .site-footer a:hover {
+          color: #ccc;
+        }
+        .footer-sep {
+          color: #555;
+        }
       }
     </style>
   </head>
@@ -390,6 +421,12 @@
             >
           </div>
         </div>
+
+        <footer class="site-footer">
+          <a href="/privacy">Privacy Policy</a>
+          <span class="footer-sep">·</span>
+          <a href="/account-deletion">Account &amp; Data Deletion</a>
+        </footer>
       </div>
     </div>
 

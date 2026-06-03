@@ -1,6 +1,16 @@
 /** Public store / deep links for invites. Replace iOS URL with your App Store ID when live. */
 export const SUPPORT_EMAIL = "info@fiocreatives.com";
 
+/** Public privacy policy URL for App Store / Play Console and in-app links. */
+export const PRIVACY_POLICY_URL =
+  "https://aistorizapi.fiocreatives.com/privacy";
+
+/** Google Play data deletion URL and support contact for account removal requests. */
+export const ACCOUNT_DELETION_URL =
+  "https://aistorizapi.fiocreatives.com/account-deletion";
+
+export const ACCOUNT_DELETION_SUPPORT_EMAIL = "fiocreativesolutions@gmail.com";
+
 export const PLAY_STORE_URL =
   "https://play.google.com/store/apps/details?id=com.aistoriz.storiz";
 

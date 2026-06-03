@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import { registerRoutes, recoverStuckJobs } from "./routes";
+import { waitForDatabase } from "./db";
 import * as fs from "fs";
 import * as path from "path";
 import { createProxyMiddleware } from "http-proxy-middleware";
@@ -200,6 +201,40 @@ function serveLandingPage({
   res.status(200).send(html);
 }
 
+const ACCOUNT_DELETION_SUPPORT_EMAIL = "fiocreativesolutions@gmail.com";
+
+function registerLegalPages(app: express.Application) {
+  const templatesDir = path.resolve(process.cwd(), "server", "templates");
+  const privacyTemplate = fs.readFileSync(
+    path.join(templatesDir, "privacy.html"),
+    "utf-8",
+  );
+  const accountDeletionTemplate = fs.readFileSync(
+    path.join(templatesDir, "account-deletion.html"),
+    "utf-8",
+  );
+  const appName = getAppName();
+
+  const renderLegalPage = (template: string) =>
+    template
+      .replace(/APP_NAME_PLACEHOLDER/g, appName)
+      .replace(/SUPPORT_EMAIL_PLACEHOLDER/g, ACCOUNT_DELETION_SUPPORT_EMAIL);
+
+  app.get("/privacy", (_req: Request, res: Response) => {
+    const html = renderLegalPage(privacyTemplate);
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.status(200).send(html);
+  });
+
+  app.get("/account-deletion", (_req: Request, res: Response) => {
+    const html = renderLegalPage(accountDeletionTemplate);
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.status(200).send(html);
+  });
+
+  log("Legal pages: GET /privacy, GET /account-deletion");
+}
+
 function configureExpoAndLanding(app: express.Application) {
   const templatePath = path.resolve(
     process.cwd(),
@@ -327,9 +362,15 @@ function setupErrorHandler(app: express.Application) {
   // Register API routes FIRST (before proxy) so they take precedence
   const server = await registerRoutes(app);
 
-  // Recover any jobs that were stuck in "processing" state when server restarted
-  await recoverStuckJobs();
-  log("Job recovery check completed");
+  const dbReady = await waitForDatabase();
+  if (dbReady) {
+    await recoverStuckJobs();
+    log("Job recovery check completed");
+  } else {
+    log("Job recovery skipped — database unavailable");
+  }
+
+  registerLegalPages(app);
 
   // Then set up Expo/landing page handling (includes proxy in dev mode)
   configureExpoAndLanding(app);

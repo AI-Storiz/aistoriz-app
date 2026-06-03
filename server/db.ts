@@ -10,15 +10,69 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
-export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  min: 2,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
-});
+function buildPoolConfig(): pg.PoolConfig {
+  const connectionString = process.env.DATABASE_URL!;
+  const config: pg.PoolConfig = {
+    connectionString,
+    min: process.env.NODE_ENV === "production" ? 2 : 1,
+    idleTimeoutMillis: 30000,
+    // Neon cold starts can exceed 5s; allow more time before giving up.
+    connectionTimeoutMillis: 15000,
+  };
+
+  try {
+    const url = new URL(connectionString);
+    const sslmode = url.searchParams.get("sslmode");
+    const host = url.hostname;
+    const needsSsl =
+      sslmode === "require" ||
+      host.includes("neon.tech") ||
+      host.includes("supabase.co");
+
+    if (needsSsl) {
+      config.ssl = { rejectUnauthorized: true };
+    }
+  } catch {
+    // Non-URL connection strings rely on pg defaults.
+  }
+
+  return config;
+}
+
+export const pool = new Pool(buildPoolConfig());
 export const db = drizzle(pool, { schema });
 
-// Warm up the connection pool at startup so the first user request doesn't pay the cold-connect cost
-pool.query("SELECT 1").catch((err: Error) => {
-  console.warn("[db] Pool warm-up query failed:", err.message);
-});
+export async function waitForDatabase(options?: {
+  attempts?: number;
+  delayMs?: number;
+}): Promise<boolean> {
+  const attempts = options?.attempts ?? 4;
+  const delayMs = options?.delayMs ?? 1500;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await pool.query("SELECT 1");
+      if (attempt > 1) {
+        console.log(`[db] Connected on attempt ${attempt}`);
+      }
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (attempt === attempts) {
+        console.error(
+          `[db] Could not connect after ${attempts} attempts: ${message}`,
+        );
+        console.error(
+          "[db] Check DATABASE_URL, VPN/firewall, and that your Neon project is awake (open the Neon dashboard if the DB was idle).",
+        );
+        return false;
+      }
+      console.warn(
+        `[db] Connection attempt ${attempt}/${attempts} failed (${message}); retrying...`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs * attempt));
+    }
+  }
+
+  return false;
+}
