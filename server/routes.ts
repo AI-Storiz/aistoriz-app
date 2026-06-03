@@ -22,7 +22,7 @@ import {
   uploadCharacterPhotoToS3OrThrow,
   uploadTestPngToS3,
 } from "./comicS3";
-import { db } from "./db";
+import { db, waitForDatabase } from "./db";
 import { comicJobs } from "../shared/schema";
 import { sendVerificationEmail, sendPasswordResetEmail, sendWelcomeEmail } from "./email";
 import { sendPushNotification, sendBroadcastNotification, sendComicCompleteNotification, sendReferralSuccessNotification } from "./notifications";
@@ -3944,9 +3944,22 @@ Dramatic professional cover art, eye-catching cinematic composition.`;
   }
 }
 
+async function runStartupDatabaseTasks(): Promise<void> {
+  const ready = await waitForDatabase();
+  if (!ready) {
+    return;
+  }
+
+  try {
+    await storage.seedDefaultArtStyles();
+  } catch (error) {
+    console.error("[db] seedDefaultArtStyles failed:", error);
+  }
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   assertComicS3Configured();
-  storage.seedDefaultArtStyles().catch(console.error);
+  void runStartupDatabaseTasks();
 
   if (process.env.NODE_ENV === "production") {
     app.use((req: Request, res: Response, next: NextFunction) => {

@@ -57,6 +57,10 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const AUTH_TOKEN_KEY = "@ai_storiz_auth_token";
+const OAUTH_CONFIG_CACHE_KEY = "@ai_storiz_oauth_config";
+const OAUTH_CONFIG_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+const AUTH_FETCH_TIMEOUT_MS = 10000;
 
 type ParseJsonResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
@@ -96,12 +100,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   async function loadOAuthConfig() {
+    // Serve from cache first so the login screen is never blocked by this fetch
     try {
-      const response = await fetch(new URL("/api/oauth-config", getApiUrl()).toString());
+      const cached = await AsyncStorage.getItem(OAUTH_CONFIG_CACHE_KEY);
+      if (cached) {
+        const { data, ts } = JSON.parse(cached) as { data: OAuthConfig; ts: number };
+        if (Date.now() - ts < OAUTH_CONFIG_CACHE_TTL_MS) {
+          setOauthConfig(data);
+          setOauthConfigLoaded(true);
+          // Refresh in background without blocking
+          refreshOAuthConfigInBackground();
+          return;
+        }
+      }
+    } catch {
+      // ignore cache read errors
+    }
+
+    await refreshOAuthConfigInBackground();
+  }
+
+  async function refreshOAuthConfigInBackground() {
+    try {
+      const controller = new AbortController();
+      const timerId = setTimeout(() => controller.abort(), AUTH_FETCH_TIMEOUT_MS);
+      const response = await fetch(new URL("/api/oauth-config", getApiUrl()).toString(), {
+        signal: controller.signal,
+      });
+      clearTimeout(timerId);
       if (response.ok) {
         const parsed = await parseJsonResponse<OAuthConfig>(response);
         if (parsed.ok) {
           setOauthConfig(parsed.data);
+          await AsyncStorage.setItem(
+            OAUTH_CONFIG_CACHE_KEY,
+            JSON.stringify({ data: parsed.data, ts: Date.now() }),
+          ).catch(() => {});
         }
       }
     } catch (error) {
@@ -178,11 +212,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      const response = await fetch(new URL("/api/auth/login", getApiUrl()).toString(), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
+      const controller = new AbortController();
+      const timerId = setTimeout(() => controller.abort(), AUTH_FETCH_TIMEOUT_MS);
+      let response: Response;
+      try {
+        response = await fetch(new URL("/api/auth/login", getApiUrl()).toString(), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timerId);
+      }
 
       const parsed = await parseJsonResponse<{
         token?: string;
@@ -210,17 +252,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { success: false, error: data.error || "Login failed" };
       }
     } catch (error: any) {
+      if (error?.name === "AbortError") {
+        return { success: false, error: "Request timed out. Please check your connection and try again." };
+      }
       return { success: false, error: error.message || "Network error" };
     }
   }, [registerPushToken]);
 
   const register = useCallback(async (email: string, password: string, referralCode?: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      const response = await fetch(new URL("/api/auth/register", getApiUrl()).toString(), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, referralCode: referralCode?.trim() || undefined }),
-      });
+      const controller = new AbortController();
+      const timerId = setTimeout(() => controller.abort(), AUTH_FETCH_TIMEOUT_MS);
+      let response: Response;
+      try {
+        response = await fetch(new URL("/api/auth/register", getApiUrl()).toString(), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password, referralCode: referralCode?.trim() || undefined }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timerId);
+      }
 
       const parsed = await parseJsonResponse<{
         token?: string;
@@ -248,6 +301,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { success: false, error: data.error || "Registration failed" };
       }
     } catch (error: any) {
+      if (error?.name === "AbortError") {
+        return { success: false, error: "Request timed out. Please check your connection and try again." };
+      }
       return { success: false, error: error.message || "Network error" };
     }
   }, [registerPushToken]);

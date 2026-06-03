@@ -440,8 +440,58 @@ if (!process.env.DATABASE_URL) {
     "DATABASE_URL must be set. Did you forget to provision a database?"
   );
 }
-var pool = new Pool({ connectionString: process.env.DATABASE_URL });
+function buildPoolConfig() {
+  const connectionString = process.env.DATABASE_URL;
+  const config = {
+    connectionString,
+    min: process.env.NODE_ENV === "production" ? 2 : 1,
+    idleTimeoutMillis: 3e4,
+    // Neon cold starts can exceed 5s; allow more time before giving up.
+    connectionTimeoutMillis: 15e3
+  };
+  try {
+    const url = new URL(connectionString);
+    const sslmode = url.searchParams.get("sslmode");
+    const host = url.hostname;
+    const needsSsl = sslmode === "require" || host.includes("neon.tech") || host.includes("supabase.co");
+    if (needsSsl) {
+      config.ssl = { rejectUnauthorized: true };
+    }
+  } catch {
+  }
+  return config;
+}
+var pool = new Pool(buildPoolConfig());
 var db = drizzle(pool, { schema: schema_exports });
+async function waitForDatabase(options) {
+  const attempts = options?.attempts ?? 4;
+  const delayMs = options?.delayMs ?? 1500;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await pool.query("SELECT 1");
+      if (attempt > 1) {
+        console.log(`[db] Connected on attempt ${attempt}`);
+      }
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (attempt === attempts) {
+        console.error(
+          `[db] Could not connect after ${attempts} attempts: ${message}`
+        );
+        console.error(
+          "[db] Check DATABASE_URL, VPN/firewall, and that your Neon project is awake (open the Neon dashboard if the DB was idle)."
+        );
+        return false;
+      }
+      console.warn(
+        `[db] Connection attempt ${attempt}/${attempts} failed (${message}); retrying...`
+      );
+      await new Promise((resolve2) => setTimeout(resolve2, delayMs * attempt));
+    }
+  }
+  return false;
+}
 
 // server/storage.ts
 import { eq, sql as sql2, and, desc, gte, ne } from "drizzle-orm";
@@ -460,6 +510,35 @@ var UPLOAD_CONCURRENCY = (() => {
   return Math.min(32, n);
 })();
 var FETCH_TIMEOUT_MS = 12e4;
+var REMOTE_SOURCE_FETCH_ATTEMPTS = 3;
+var REMOTE_SOURCE_FETCH_RETRY_MS = 500;
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+async function fetchRemoteImageForIngest(url) {
+  let lastErr;
+  for (let attempt = 1; attempt <= REMOTE_SOURCE_FETCH_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+      if (res.ok) {
+        return res;
+      }
+      if (res.status >= 500 && attempt < REMOTE_SOURCE_FETCH_ATTEMPTS) {
+        await sleep(REMOTE_SOURCE_FETCH_RETRY_MS * attempt);
+        continue;
+      }
+      return res;
+    } catch (e) {
+      lastErr = e;
+      if (attempt < REMOTE_SOURCE_FETCH_ATTEMPTS) {
+        await sleep(REMOTE_SOURCE_FETCH_RETRY_MS * attempt);
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
 var PUBLIC_BASE = (() => {
   const cdn = process.env.COMIC_CDN_BASE_URL?.replace(/\/$/, "");
   if (cdn) {
@@ -625,6 +704,33 @@ function isOnOurStorageHttps(url) {
   }
   return false;
 }
+function mediaReferenceNeedsS3Upload(value) {
+  return typeof value === "string" && value.trim().length > 0 && !isOnOurStorageHttps(value);
+}
+function comicPagesNeedS3Ingest(pages) {
+  if (!Array.isArray(pages)) {
+    return false;
+  }
+  for (const raw of pages) {
+    if (raw == null || typeof raw !== "object") {
+      continue;
+    }
+    const o = raw;
+    if (mediaReferenceNeedsS3Upload(o.imageUrl) || mediaReferenceNeedsS3Upload(o.imageUri)) {
+      return true;
+    }
+    const pan = o.panelImages;
+    if (!Array.isArray(pan)) {
+      continue;
+    }
+    for (const c of pan) {
+      if (mediaReferenceNeedsS3Upload(c)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 function extFromContentType(contentType, fallback) {
   if (!contentType) return fallback;
   const c = contentType.toLowerCase().split(";")[0].trim();
@@ -674,7 +780,7 @@ async function uploadComicFieldToS3OrThrow(userId, comicId, pageIndex, fieldKey,
     contentType = decoded.contentType;
     ext = decoded.ext;
   } else if (t.startsWith("https://") || t.startsWith("http://")) {
-    const res = await fetch(t, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    const res = await fetchRemoteImageForIngest(t);
     if (!res.ok) {
       throw new ComicS3Error(
         `Failed to fetch source image (${res.status}) for field ${fieldKey}`
@@ -766,6 +872,21 @@ function assertPageFieldsAreAssetUrls(page, pageIndex) {
     if (cell.trim() && !isComicAssetUrl(cell)) {
       throw new ComicS3Error(`Page ${pageIndex} panelImages[${i}]: S3/ CDN https URL required`);
     }
+  }
+}
+function assertPersistedComicPagesAreAssetUrlsOnly(pages, context) {
+  if (pages == null) {
+    return;
+  }
+  if (!Array.isArray(pages)) {
+    throw new ComicS3Error(`${context}: pages must be an array`);
+  }
+  for (let i = 0; i < pages.length; i++) {
+    const raw = pages[i];
+    if (raw == null || typeof raw !== "object") {
+      continue;
+    }
+    assertPageFieldsAreAssetUrls(raw, i);
   }
 }
 function comicPageIsImageEmpty(p) {
@@ -865,6 +986,12 @@ async function ingestComicPagesToS3(userId, comicId, pages) {
         );
       }
     }
+  }
+  if (tasks.length === 0) {
+    for (let pIdx = 0; pIdx < out.length; pIdx++) {
+      assertPageFieldsAreAssetUrls(out[pIdx], pIdx);
+    }
+    return out;
   }
   await Promise.all(tasks);
   for (let pIdx = 0; pIdx < out.length; pIdx++) {
@@ -1103,7 +1230,35 @@ var DatabaseStorage = class {
       title: userComics.title,
       style: userComics.style,
       characterNames: userComics.characterNames,
-      createdAt: userComics.createdAt
+      createdAt: userComics.createdAt,
+      thumbnailAssetUrl: sql2`
+          (
+            SELECT COALESCE(
+              NULLIF(BTRIM(p.val->>'imageUrl'), ''),
+              NULLIF(BTRIM(p.val->>'imageUri'), ''),
+              (
+                SELECT NULLIF(BTRIM(txt), '')
+                FROM jsonb_array_elements_text(COALESCE(p.val->'panelImages', '[]'::jsonb)) AS t(txt)
+                WHERE NULLIF(BTRIM(txt), '') IS NOT NULL
+                LIMIT 1
+              )
+            )
+            FROM jsonb_array_elements(COALESCE(${userComics.pages}, '[]'::jsonb))
+              WITH ORDINALITY AS p(val, ord)
+            WHERE COALESCE(
+              NULLIF(BTRIM(p.val->>'imageUrl'), ''),
+              NULLIF(BTRIM(p.val->>'imageUri'), ''),
+              (
+                SELECT NULLIF(BTRIM(txt2), '')
+                FROM jsonb_array_elements_text(COALESCE(p.val->'panelImages', '[]'::jsonb)) AS t2(txt2)
+                WHERE NULLIF(BTRIM(txt2), '') IS NOT NULL
+                LIMIT 1
+              )
+            ) IS NOT NULL
+            ORDER BY p.ord
+            LIMIT 1
+          )
+        `.as("thumbnailAssetUrl")
     }).from(userComics).where(and(eq(userComics.userId, userId), ne(userComics.isDraft, true))).orderBy(desc(userComics.createdAt));
     return comics;
   }
@@ -1117,7 +1272,7 @@ var DatabaseStorage = class {
       return;
     }
     const stripped = stripNonAssetImagesFromComicPagesJson(row.pages);
-    const { pages: next, changed } = normalizeComicPagesOrder(stripped);
+    const { pages: next } = normalizeComicPagesOrder(stripped);
     const unchanged = JSON.stringify(next) === JSON.stringify(row.pages);
     if (!unchanged) {
       await db.update(userComics).set({ pages: next, updatedAt: /* @__PURE__ */ new Date() }).where(and(eq(userComics.id, id), eq(userComics.userId, userId)));
@@ -1144,6 +1299,9 @@ var DatabaseStorage = class {
             'panelCount', COALESCE(jsonb_array_length(page->'panelImages'), 0),
             'panels', page->'panels',
             'scenes', page->'scenes',
+            'imageUrl', NULLIF(btrim(coalesce(page->>'imageUrl', '')), ''),
+            'imageUri', NULLIF(btrim(coalesce(page->>'imageUri', '')), ''),
+            'panelImages', COALESCE(page->'panelImages', '[]'::jsonb),
             'hasImageUrl', (
               length(btrim(coalesce(page->>'imageUrl', ''))) > 0
               OR length(btrim(coalesce(page->>'imageUri', ''))) > 0
@@ -1264,6 +1422,9 @@ var DatabaseStorage = class {
     return this.firstNonEmptyImageFromPages(comic.pages);
   }
   async createUserComic(userId, data) {
+    if (Array.isArray(data.pages) && data.pages.length > 0) {
+      assertPersistedComicPagesAreAssetUrlsOnly(data.pages, "user_comics.insert");
+    }
     const [comic] = await db.insert(userComics).values({
       userId,
       title: data.title,
@@ -1275,6 +1436,9 @@ var DatabaseStorage = class {
     return comic;
   }
   async updateUserComic(id, userId, updates) {
+    if (updates.pages !== void 0 && Array.isArray(updates.pages) && updates.pages.length > 0) {
+      assertPersistedComicPagesAreAssetUrlsOnly(updates.pages, `user_comics.update:${id}`);
+    }
     const updateData = { updatedAt: /* @__PURE__ */ new Date() };
     if (updates.title !== void 0) updateData.title = updates.title;
     if (updates.pages !== void 0) updateData.pages = updates.pages;
@@ -2158,6 +2322,23 @@ function getBase64ImageSize(dataUri) {
     return null;
   }
 }
+function detectImageMimeType(buffer) {
+  const bytes = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  if (bytes.length < 12) return null;
+  if (bytes[0] === 137 && bytes[1] === 80 && bytes[2] === 78 && bytes[3] === 71) {
+    return "image/png";
+  }
+  if (bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) {
+    return "image/jpeg";
+  }
+  if (bytes[0] === 82 && bytes[1] === 73 && bytes[2] === 70 && bytes[3] === 70 && bytes[8] === 87 && bytes[9] === 69 && bytes[10] === 66 && bytes[11] === 80) {
+    return "image/webp";
+  }
+  if (bytes[0] === 71 && bytes[1] === 73 && bytes[2] === 70) {
+    return "image/gif";
+  }
+  return null;
+}
 async function createUserComicS3Only(userId, data) {
   assertComicS3Configured();
   const row = await storage.createUserComic(userId, {
@@ -2241,13 +2422,22 @@ async function syncJobPagesToS3Library(job, opts) {
     return;
   }
   assertComicS3Configured();
-  const ingested = await ingestComicPagesToS3(job.userId, job.libraryComicId, job.pages);
-  const { pages: normalizedPages } = normalizeComicPagesOrder(ingested);
+  const pagesSnapshot = job.pages;
+  const needIngest = comicPagesNeedS3Ingest(pagesSnapshot);
+  const ingested = await ingestComicPagesToS3(job.userId, job.libraryComicId, pagesSnapshot);
+  const { pages: normalizedPages, changed: pagesOrderChanged } = normalizeComicPagesOrder(ingested);
+  const titleNow = job.title || "Untitled Comic";
+  const titleAlreadyOnLibraryRow = job.libraryRowTitleSynced === titleNow;
+  if (!needIngest && !pagesOrderChanged && !opts?.publish && titleAlreadyOnLibraryRow) {
+    job.pages = normalizedPages;
+    return;
+  }
   await storage.updateUserComic(job.libraryComicId, job.userId, {
-    title: job.title || "Untitled Comic",
+    title: titleNow,
     pages: normalizedPages,
     ...opts?.publish ? { isDraft: false } : {}
   });
+  job.libraryRowTitleSynced = titleNow;
   job.pages = normalizedPages;
 }
 async function discardLibraryComicDraftIfUnused(job) {
@@ -2267,7 +2457,7 @@ function chunkArray(array, chunkSize) {
   return chunks;
 }
 var PARALLEL_BATCH_SIZE = 8;
-var BATCH_DELAY_MS = 300;
+var BATCH_DELAY_MS = 250;
 function generateVerificationCode() {
   return Math.floor(1e5 + Math.random() * 9e5).toString();
 }
@@ -2619,6 +2809,19 @@ async function generateTextWithProvider(systemPrompt, userPrompt, responseFormat
   return response.choices[0].message.content || "";
 }
 var jobsCache = /* @__PURE__ */ new Map();
+function userFacingJobPersistError(err) {
+  if (err instanceof ComicS3Error) {
+    if (err.code === "S3_NOT_CONFIGURED") {
+      return "Comic storage is temporarily unavailable. Please try again in a few minutes.";
+    }
+    return "We couldn't upload your comic images. Please try again.";
+  }
+  const msg = err && typeof err === "object" && "message" in err ? String(err.message) : "";
+  if (/S3|PutObject|fetch source image|INGEST_FAILED/i.test(msg)) {
+    return "We couldn't upload your comic images. Please try again.";
+  }
+  return "We couldn't save your comic progress. Please try again.";
+}
 async function saveJobToDb(job) {
   try {
     if (job.userId && Array.isArray(job.pages) && job.pages.length > 0 && comicPagesContainNonAssetImages(job.pages)) {
@@ -2652,14 +2855,40 @@ async function saveJobToDb(job) {
         pagesCount: job.pagesCount || null,
         pages: pagesColumn,
         error: job.error || null,
-        libraryComicId: job.libraryComicId ?? null
+        libraryComicId: job.libraryComicId ?? null,
+        updatedAt: /* @__PURE__ */ new Date()
+      }).onConflictDoUpdate({
+        target: comicJobs.id,
+        set: {
+          userId: job.userId || null,
+          status: job.status,
+          progress: job.progress,
+          title: job.title || null,
+          style: job.style || null,
+          pagesCount: job.pagesCount || null,
+          pages: job.pages,
+          error: job.error || null,
+          libraryComicId: job.libraryComicId ?? null,
+          updatedAt: /* @__PURE__ */ new Date()
+        }
       });
     }
     job.pages = pagesColumn;
     jobsCache.set(job.id, job);
   } catch (error) {
     console.error("Error saving job to database:", error);
+    if (!job.error) {
+      job.error = userFacingJobPersistError(error);
+    }
     jobsCache.set(job.id, job);
+    try {
+      await db.update(comicJobs).set({
+        error: job.error || null,
+        updatedAt: /* @__PURE__ */ new Date()
+      }).where(eq2(comicJobs.id, job.id));
+    } catch (persistErr) {
+      console.error("Failed to persist job error to comic_jobs:", persistErr);
+    }
   }
 }
 async function getJobFromDb(jobId) {
@@ -2731,6 +2960,27 @@ function getActiveReplicateModel() {
   }
   return null;
 }
+var REMOTE_IMAGE_FETCH_MS = 12e4;
+async function pipelineImageResultFromRemoteOutputUrl(imageUrl, fallbackMimeType) {
+  const t = (imageUrl || "").trim();
+  if (!t) {
+    return "";
+  }
+  if (process.env.COMIC_PIPELINE_FETCH_REMOTE_IMAGES_TO_DATA_URI === "1") {
+    const imageResponse = await fetch(t, { signal: AbortSignal.timeout(REMOTE_IMAGE_FETCH_MS) });
+    if (!imageResponse.ok) {
+      throw new Error(`Failed to fetch generated image (${imageResponse.status})`);
+    }
+    const buffer = await imageResponse.arrayBuffer();
+    const base64 = Buffer.from(buffer).toString("base64");
+    const contentType = imageResponse.headers.get("content-type") || fallbackMimeType;
+    return `data:${contentType};base64,${base64}`;
+  }
+  if (t.startsWith("https://") || t.startsWith("http://")) {
+    return t;
+  }
+  return t;
+}
 async function generateImageWithReplicate(prompt, aspectRatio = "1:1") {
   const apiKey = aiSettings.replicate.apiKey;
   if (!apiKey) throw new Error("Replicate API key not configured");
@@ -2784,11 +3034,7 @@ async function generateImageWithReplicate(prompt, aspectRatio = "1:1") {
   if (result.status === "succeeded") {
     const imageUrl = typeof result.output === "string" ? result.output : result.output?.[0];
     if (imageUrl) {
-      const imageResponse = await fetch(imageUrl);
-      const buffer = await imageResponse.arrayBuffer();
-      const base64 = Buffer.from(buffer).toString("base64");
-      const contentType = imageResponse.headers.get("content-type") || "image/webp";
-      return `data:${contentType};base64,${base64}`;
+      return await pipelineImageResultFromRemoteOutputUrl(imageUrl, "image/webp");
     }
     return "";
   }
@@ -2804,11 +3050,7 @@ async function generateImageWithReplicate(prompt, aspectRatio = "1:1") {
     if (result.status === "succeeded") {
       const imageUrl = typeof result.output === "string" ? result.output : result.output?.[0];
       if (imageUrl) {
-        const imageResponse = await fetch(imageUrl);
-        const buffer = await imageResponse.arrayBuffer();
-        const base64 = Buffer.from(buffer).toString("base64");
-        const contentType = imageResponse.headers.get("content-type") || "image/webp";
-        return `data:${contentType};base64,${base64}`;
+        return await pipelineImageResultFromRemoteOutputUrl(imageUrl, "image/webp");
       }
       return "";
     }
@@ -2853,11 +3095,7 @@ async function generateImageWithKontext(prompt, inputImageUrl, aspectRatio = "1:
   if (result.status === "succeeded") {
     const imageUrl = typeof result.output === "string" ? result.output : result.output?.[0];
     if (imageUrl) {
-      const imageResponse = await fetch(imageUrl);
-      const buffer = await imageResponse.arrayBuffer();
-      const base64 = Buffer.from(buffer).toString("base64");
-      const contentType = imageResponse.headers.get("content-type") || "image/webp";
-      return `data:${contentType};base64,${base64}`;
+      return await pipelineImageResultFromRemoteOutputUrl(imageUrl, "image/webp");
     }
     return "";
   }
@@ -2873,11 +3111,7 @@ async function generateImageWithKontext(prompt, inputImageUrl, aspectRatio = "1:
     if (result.status === "succeeded") {
       const imageUrl = typeof result.output === "string" ? result.output : result.output?.[0];
       if (imageUrl) {
-        const imageResponse = await fetch(imageUrl);
-        const buffer = await imageResponse.arrayBuffer();
-        const base64 = Buffer.from(buffer).toString("base64");
-        const contentType = imageResponse.headers.get("content-type") || "image/webp";
-        return `data:${contentType};base64,${base64}`;
+        return await pipelineImageResultFromRemoteOutputUrl(imageUrl, "image/webp");
       }
       return "";
     }
@@ -2924,21 +3158,13 @@ async function generateImageWithSiliconFlow(prompt, referenceImageUrls = [], asp
   if (result.images && result.images.length > 0) {
     const imageUrl = result.images[0].url;
     if (imageUrl) {
-      const imageResponse = await fetch(imageUrl);
-      const buffer = await imageResponse.arrayBuffer();
-      const base64 = Buffer.from(buffer).toString("base64");
-      const contentType = imageResponse.headers.get("content-type") || "image/png";
-      return `data:${contentType};base64,${base64}`;
+      return await pipelineImageResultFromRemoteOutputUrl(imageUrl, "image/png");
     }
   }
   if (result.data && result.data.length > 0) {
     const imageData = result.data[0];
     if (imageData.url) {
-      const imageResponse = await fetch(imageData.url);
-      const buffer = await imageResponse.arrayBuffer();
-      const base64 = Buffer.from(buffer).toString("base64");
-      const contentType = imageResponse.headers.get("content-type") || "image/png";
-      return `data:${contentType};base64,${base64}`;
+      return await pipelineImageResultFromRemoteOutputUrl(imageData.url, "image/png");
     }
     if (imageData.b64_json) {
       return `data:image/png;base64,${imageData.b64_json}`;
@@ -3004,11 +3230,7 @@ Both characters must be clearly visible and match their reference images precise
   if (result.status === "succeeded") {
     const imageUrl = typeof result.output === "string" ? result.output : result.output?.[0];
     if (imageUrl) {
-      const imageResponse = await fetch(imageUrl);
-      const buffer = await imageResponse.arrayBuffer();
-      const base64 = Buffer.from(buffer).toString("base64");
-      const contentType = imageResponse.headers.get("content-type") || "image/webp";
-      return `data:${contentType};base64,${base64}`;
+      return await pipelineImageResultFromRemoteOutputUrl(imageUrl, "image/webp");
     }
   }
   throw new Error(`FLUX.2 Pro generation failed: ${result.error || result.status}`);
@@ -3048,12 +3270,10 @@ async function generateImageWithConsistentCharacter(prompt, subjectImageUrl, out
   if (result.status === "succeeded") {
     const outputs = result.output;
     if (outputs && outputs.length > 0) {
-      const imageUrl = outputs[0];
-      const imageResponse = await fetch(imageUrl);
-      const buffer = await imageResponse.arrayBuffer();
-      const base64 = Buffer.from(buffer).toString("base64");
-      const contentType = imageResponse.headers.get("content-type") || "image/webp";
-      return `data:${contentType};base64,${base64}`;
+      const raw = outputs[0];
+      if (typeof raw === "string" && raw.trim()) {
+        return await pipelineImageResultFromRemoteOutputUrl(raw, "image/webp");
+      }
     }
     return "";
   }
@@ -3069,12 +3289,10 @@ async function generateImageWithConsistentCharacter(prompt, subjectImageUrl, out
     if (result.status === "succeeded") {
       const outputs = result.output;
       if (outputs && outputs.length > 0) {
-        const imageUrl = outputs[0];
-        const imageResponse = await fetch(imageUrl);
-        const buffer = await imageResponse.arrayBuffer();
-        const base64 = Buffer.from(buffer).toString("base64");
-        const contentType = imageResponse.headers.get("content-type") || "image/webp";
-        return `data:${contentType};base64,${base64}`;
+        const raw = outputs[0];
+        if (typeof raw === "string" && raw.trim()) {
+          return await pipelineImageResultFromRemoteOutputUrl(raw, "image/webp");
+        }
       }
       return "";
     }
@@ -5208,9 +5426,20 @@ Dramatic professional cover art, eye-catching cinematic composition.`;
     await refundCreditsForFailedJob(job);
   }
 }
+async function runStartupDatabaseTasks() {
+  const ready = await waitForDatabase();
+  if (!ready) {
+    return;
+  }
+  try {
+    await storage.seedDefaultArtStyles();
+  } catch (error) {
+    console.error("[db] seedDefaultArtStyles failed:", error);
+  }
+}
 async function registerRoutes(app2) {
   assertComicS3Configured();
-  storage.seedDefaultArtStyles().catch(console.error);
+  void runStartupDatabaseTasks();
   if (process.env.NODE_ENV === "production") {
     app2.use((req, res, next) => {
       const proto = req.get("x-forwarded-proto");
@@ -6337,7 +6566,12 @@ async function registerRoutes(app2) {
           return res.status(404).json({ error: "Image not found on S3" });
         }
         const imageBuffer = await imageResponse.arrayBuffer();
-        const contentType = imageResponse.headers.get("content-type") || "image/png";
+        let contentType = imageResponse.headers.get("content-type");
+        if (!contentType || contentType === "application/octet-stream" || contentType === "binary/octet-stream") {
+          const detected = detectImageMimeType(imageBuffer);
+          contentType = detected || "image/png";
+          console.log(`[PROXY] S3 Content-Type was "${imageResponse.headers.get("content-type")}", detected from bytes: ${contentType}`);
+        }
         console.log(`[PROXY] Successfully proxying image, size: ${imageBuffer.byteLength} bytes, type: ${contentType}`);
         res.set("Content-Type", contentType);
         res.set("Cache-Control", "no-cache, no-store, must-revalidate");
@@ -6417,6 +6651,9 @@ async function registerRoutes(app2) {
         pageType: page.pageType,
         panelCount: page.panelCount || 0,
         hasImageUrl: page.hasImageUrl,
+        imageUrl: page.imageUrl ?? null,
+        imageUri: page.imageUri ?? null,
+        panelImages: page.panelImages ?? [],
         panels: page.panels,
         scenes: page.scenes,
         generationMode: page.generationMode,
@@ -6580,6 +6817,7 @@ async function registerRoutes(app2) {
     await storage.recordTransaction(userId, -totalCost, "comic_generation", `Generated ${numPages}-page ${style} comic: ${title || "Untitled"}`);
     console.log(`Deducted ${totalCost} credits from user ${userId}. New balance: ${updatedUser?.credits}`);
     const jobId = crypto.randomUUID();
+    const characterNames = (characters2 || []).map((c) => c.name).filter(Boolean);
     const job = {
       id: jobId,
       userId,
@@ -6589,9 +6827,23 @@ async function registerRoutes(app2) {
       style,
       pagesCount: numPages,
       pages: [],
+      characterNames,
       createdAt: Date.now()
     };
-    await saveJobToDb(job);
+    try {
+      await ensureLibraryComicDraftForJob(job, { title, style, characterNames });
+      await saveJobToDb(job);
+    } catch (jobPersistErr) {
+      console.error("Failed to persist comic job / S3 draft:", jobPersistErr);
+      await storage.updateUserCredits(userId, totalCost);
+      await storage.recordTransaction(
+        userId,
+        totalCost,
+        "comic_generation_refund",
+        "Refund: failed to initialize job (library draft / DB)"
+      );
+      return res.status(500).json({ error: "Could not start comic generation. Your credits were refunded." });
+    }
     console.log(`Job ${jobId} created for user ${userId} and stored in database`);
     await storage.createAuditLog({
       userId,
@@ -6610,12 +6862,17 @@ async function registerRoutes(app2) {
   });
   const handleJobStatus = async (req, res) => {
     const jobId = req.params.jobId;
-    const userAgent = req.headers["user-agent"] || "unknown";
-    const clientIP = req.ip || req.headers["x-forwarded-for"] || "unknown";
-    console.log(`=== Job status check for ${jobId} from ${clientIP} (${userAgent.substring(0, 50)}) ===`);
+    const verboseJobLog = process.env.JOB_STATUS_DEBUG === "1" || process.env.NODE_ENV !== "production";
+    if (verboseJobLog) {
+      const userAgent = req.headers["user-agent"] || "unknown";
+      const clientIP = req.ip || req.headers["x-forwarded-for"] || "unknown";
+      console.log(`[job] ${jobId} status poll from ${String(clientIP).slice(0, 40)} (${String(userAgent).slice(0, 50)})`);
+    }
     const job = await getJobFromDb(jobId);
     if (!job) {
-      console.log(`Job ${jobId} not found in database or cache`);
+      if (verboseJobLog) {
+        console.log(`[job] ${jobId} not found`);
+      }
       return res.status(404).json({ error: "Job not found" });
     }
     if (job.status === "completed" || job.status === "failed") {
@@ -6636,6 +6893,7 @@ async function registerRoutes(app2) {
         progress: job.progress,
         title: job.title,
         pagesCompleted: job.pages?.length || 0,
+        pagesTotal: job.pagesCount ?? null,
         error: job.error
       });
     }
@@ -7189,6 +7447,31 @@ function serveLandingPage({
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.status(200).send(html);
 }
+var ACCOUNT_DELETION_SUPPORT_EMAIL = "fiocreativesolutions@gmail.com";
+function registerLegalPages(app2) {
+  const templatesDir = path2.resolve(process.cwd(), "server", "templates");
+  const privacyTemplate = fs2.readFileSync(
+    path2.join(templatesDir, "privacy.html"),
+    "utf-8"
+  );
+  const accountDeletionTemplate = fs2.readFileSync(
+    path2.join(templatesDir, "account-deletion.html"),
+    "utf-8"
+  );
+  const appName = getAppName();
+  const renderLegalPage = (template) => template.replace(/APP_NAME_PLACEHOLDER/g, appName).replace(/SUPPORT_EMAIL_PLACEHOLDER/g, ACCOUNT_DELETION_SUPPORT_EMAIL);
+  app2.get("/privacy", (_req, res) => {
+    const html = renderLegalPage(privacyTemplate);
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.status(200).send(html);
+  });
+  app2.get("/account-deletion", (_req, res) => {
+    const html = renderLegalPage(accountDeletionTemplate);
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.status(200).send(html);
+  });
+  log("Legal pages: GET /privacy, GET /account-deletion");
+}
 function configureExpoAndLanding(app2) {
   const templatePath = path2.resolve(
     process.cwd(),
@@ -7279,8 +7562,14 @@ function setupErrorHandler(app2) {
   setupBodyParsing(app);
   setupRequestLogging(app);
   const server = await registerRoutes(app);
-  await recoverStuckJobs();
-  log("Job recovery check completed");
+  const dbReady = await waitForDatabase();
+  if (dbReady) {
+    await recoverStuckJobs();
+    log("Job recovery check completed");
+  } else {
+    log("Job recovery skipped \u2014 database unavailable");
+  }
+  registerLegalPages(app);
   configureExpoAndLanding(app);
   setupErrorHandler(app);
   const port = parseInt(process.env.PORT || "5001", 10);

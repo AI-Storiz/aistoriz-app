@@ -15,9 +15,6 @@ android/.gradle/
 android/app/build/
 android/build/
 ios/build/
-*.keystore
-*.jks
-*.p12
 
 # local env / secrets
 .env.local
@@ -25,7 +22,6 @@ ios/build/
 .env.*
 !.env.example
 .ai-settings.json
-android/keystore.properties
 
 # logs
 *.log

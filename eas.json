@@ -5,16 +5,12 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal",
-      "android": {
-        "resourceClass": "large"
-      }
+      "distribution": "internal"
     },
     "preview": {
       "distribution": "internal",
       "android": {
-        "buildType": "apk",
-        "resourceClass": "large"
+        "buildType": "apk"
       },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://aistorizapi.fiocreatives.com/"
@@ -25,8 +21,7 @@
         "EXPO_PUBLIC_API_URL": "https://aistorizapi.fiocreatives.com/"
       },
       "android": {
-        "buildType": "apk",
-        "resourceClass": "large"
+        "buildType": "apk"
       },
       "ios": {
         "buildConfiguration": "Release"
@@ -37,8 +32,7 @@
         "EXPO_PUBLIC_API_URL": "https://aistorizapi.fiocreatives.com/"
       },
       "android": {
-        "buildType": "app-bundle",
-        "resourceClass": "large"
+        "buildType": "app-bundle"
       }
     }
   },

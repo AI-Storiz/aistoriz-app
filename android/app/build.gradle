@@ -111,11 +111,11 @@ android {
             keyPassword 'android'
         }
         release {
-            if (keystorePropertiesFile.exists()) {
-                storeFile file(keystoreProperties['storeFile'])
-                storePassword keystoreProperties['storePassword']
-                keyAlias keystoreProperties['keyAlias']
-                keyPassword keystoreProperties['keyPassword']
+            if (project.hasProperty('MYAPP_RELEASE_STORE_FILE')) {
+                storeFile file(MYAPP_RELEASE_STORE_FILE)
+                storePassword MYAPP_RELEASE_STORE_PASSWORD
+                keyAlias MYAPP_RELEASE_KEY_ALIAS
+                keyPassword MYAPP_RELEASE_KEY_PASSWORD
             }
         }
     }
@@ -124,7 +124,7 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            signingConfig keystorePropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug
+            signingConfig project.hasProperty('MYAPP_RELEASE_STORE_FILE') ? signingConfigs.release : signingConfigs.debug
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds
