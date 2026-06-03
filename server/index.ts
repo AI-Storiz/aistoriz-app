@@ -3,6 +3,7 @@ import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import { registerRoutes, recoverStuckJobs } from "./routes";
 import { waitForDatabase } from "./db";
+import * as legal from "../shared/legal";
 import * as fs from "fs";
 import * as path from "path";
 import { createProxyMiddleware } from "http-proxy-middleware";
@@ -201,8 +202,6 @@ function serveLandingPage({
   res.status(200).send(html);
 }
 
-const ACCOUNT_DELETION_SUPPORT_EMAIL = "fiocreativesolutions@gmail.com";
-
 function registerLegalPages(app: express.Application) {
   const templatesDir = path.resolve(process.cwd(), "server", "templates");
   const privacyTemplate = fs.readFileSync(
@@ -213,23 +212,33 @@ function registerLegalPages(app: express.Application) {
     path.join(templatesDir, "account-deletion.html"),
     "utf-8",
   );
+  const legalStyles = fs.readFileSync(
+    path.join(templatesDir, "legal-page.css"),
+    "utf-8",
+  );
   const appName = getAppName();
 
   const renderLegalPage = (template: string) =>
     template
+      .replace(/LEGAL_STYLES_PLACEHOLDER/g, legalStyles)
       .replace(/APP_NAME_PLACEHOLDER/g, appName)
-      .replace(/SUPPORT_EMAIL_PLACEHOLDER/g, ACCOUNT_DELETION_SUPPORT_EMAIL);
+      .replace(/DEVELOPER_NAME_PLACEHOLDER/g, legal.LEGAL_DEVELOPER_NAME)
+      .replace(/LAST_UPDATED_PLACEHOLDER/g, legal.LEGAL_LAST_UPDATED)
+      .replace(/PRIVACY_EMAIL_PLACEHOLDER/g, legal.LEGAL_CONTACT_EMAIL)
+      .replace(/SUPPORT_EMAIL_PLACEHOLDER/g, legal.LEGAL_CONTACT_EMAIL);
+
+  const sendLegalHtml = (res: Response, html: string) => {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.status(200).send(html);
+  };
 
   app.get("/privacy", (_req: Request, res: Response) => {
-    const html = renderLegalPage(privacyTemplate);
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.status(200).send(html);
+    sendLegalHtml(res, renderLegalPage(privacyTemplate));
   });
 
   app.get("/account-deletion", (_req: Request, res: Response) => {
-    const html = renderLegalPage(accountDeletionTemplate);
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.status(200).send(html);
+    sendLegalHtml(res, renderLegalPage(accountDeletionTemplate));
   });
 
   log("Legal pages: GET /privacy, GET /account-deletion");

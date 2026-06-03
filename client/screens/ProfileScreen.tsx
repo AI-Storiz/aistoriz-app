@@ -492,6 +492,13 @@ export default function ProfileScreen() {
               onPress={handleClearHistory}
               isDestructive
             />
+            <SettingsItem
+              icon="user-x"
+              title="Delete Account"
+              subtitle="Request account & data deletion"
+              onPress={() => navigation.navigate("AccountDeletion")}
+              isDestructive
+            />
           </View>
         </Animated.View>
 

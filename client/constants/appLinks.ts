@@ -1,16 +1,11 @@
+export {
+  LEGAL_CONTACT_EMAIL as SUPPORT_EMAIL,
+  LEGAL_CONTACT_EMAIL as ACCOUNT_DELETION_SUPPORT_EMAIL,
+  LEGAL_PRIVACY_POLICY_URL as PRIVACY_POLICY_URL,
+  LEGAL_ACCOUNT_DELETION_URL as ACCOUNT_DELETION_URL,
+} from "@shared/legal";
+
 /** Public store / deep links for invites. Replace iOS URL with your App Store ID when live. */
-export const SUPPORT_EMAIL = "info@fiocreatives.com";
-
-/** Public privacy policy URL for App Store / Play Console and in-app links. */
-export const PRIVACY_POLICY_URL =
-  "https://aistorizapi.fiocreatives.com/privacy";
-
-/** Google Play data deletion URL and support contact for account removal requests. */
-export const ACCOUNT_DELETION_URL =
-  "https://aistorizapi.fiocreatives.com/account-deletion";
-
-export const ACCOUNT_DELETION_SUPPORT_EMAIL = "fiocreativesolutions@gmail.com";
-
 export const PLAY_STORE_URL =
   "https://play.google.com/store/apps/details?id=com.aistoriz.storiz";
 
