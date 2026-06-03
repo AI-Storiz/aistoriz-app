@@ -6,6 +6,7 @@ import { useHeaderHeight } from "@react-navigation/elements";
 import { useTheme } from "@/hooks/useTheme";
 import { ThemedText } from "@/components/ThemedText";
 import { Spacing, BorderRadius } from "@/constants/theme";
+import { LEGAL_CONTACT_EMAIL } from "@shared/legal";
 
 export default function AboutScreen() {
   const insets = useSafeAreaInsets();
@@ -56,7 +57,7 @@ export default function AboutScreen() {
         <ThemedText style={styles.paragraph}>
           Have questions, feedback, or need support? We'd love to hear from you!
         </ThemedText>
-        <ThemedText style={styles.contactInfo}>Email: info@fiocreatives.com</ThemedText>
+        <ThemedText style={styles.contactInfo}>Email: {LEGAL_CONTACT_EMAIL}</ThemedText>
         <ThemedText style={styles.contactInfo}>Website: www.fiocreatives.com</ThemedText>
       </View>
 

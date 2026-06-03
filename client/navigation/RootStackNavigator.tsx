@@ -13,6 +13,7 @@ import EarnCreditsScreen from "@/screens/EarnCreditsScreen";
 import SubscriptionScreen from "@/screens/SubscriptionScreen";
 import AboutScreen from "@/screens/AboutScreen";
 import PrivacyScreen from "@/screens/PrivacyScreen";
+import AccountDeletionScreen from "@/screens/AccountDeletionScreen";
 import TermsScreen from "@/screens/TermsScreen";
 import StoryHintsScreen from "@/screens/StoryHintsScreen";
 import { useScreenOptions } from "@/hooks/useScreenOptions";
@@ -46,6 +47,7 @@ export type RootStackParamList = {
   Subscription: undefined;
   About: undefined;
   Privacy: undefined;
+  AccountDeletion: undefined;
   Terms: undefined;
   StoryHints: undefined;
 };
@@ -82,6 +84,22 @@ export default function RootStackNavigator() {
             name="ResetPassword"
             component={ResetPasswordScreen}
             options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="Privacy"
+            component={PrivacyScreen}
+            options={{
+              presentation: "modal",
+              headerTitle: "Privacy Policy",
+            }}
+          />
+          <Stack.Screen
+            name="Terms"
+            component={TermsScreen}
+            options={{
+              presentation: "modal",
+              headerTitle: "Terms of Service",
+            }}
           />
         </>
       ) : !isEmailVerified ? (
@@ -152,6 +170,14 @@ export default function RootStackNavigator() {
             options={{
               presentation: "modal",
               headerTitle: "Privacy Policy",
+            }}
+          />
+          <Stack.Screen
+            name="AccountDeletion"
+            component={AccountDeletionScreen}
+            options={{
+              presentation: "modal",
+              headerTitle: "Delete Account",
             }}
           />
           <Stack.Screen

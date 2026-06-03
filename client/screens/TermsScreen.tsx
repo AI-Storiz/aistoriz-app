@@ -6,6 +6,7 @@ import { useHeaderHeight } from "@react-navigation/elements";
 import { useTheme } from "@/hooks/useTheme";
 import { ThemedText } from "@/components/ThemedText";
 import { Spacing, BorderRadius } from "@/constants/theme";
+import { LEGAL_CONTACT_EMAIL } from "@shared/legal";
 
 export default function TermsScreen() {
   const insets = useSafeAreaInsets();
@@ -93,7 +94,7 @@ export default function TermsScreen() {
       <View style={[styles.section, { backgroundColor: theme.backgroundDefault }]}>
         <ThemedText type="h3" style={styles.sectionTitle}>9. Contact</ThemedText>
         <ThemedText style={styles.paragraph}>
-          For questions about these Terms, contact us at info@fiocreatives.com
+          For questions about these Terms, contact us at {LEGAL_CONTACT_EMAIL}
         </ThemedText>
       </View>
     </ScrollView>

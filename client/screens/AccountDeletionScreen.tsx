@@ -1,10 +1,10 @@
 import React from "react";
-import { StyleSheet, ScrollView, Pressable } from "react-native";
+import { StyleSheet, ScrollView, Pressable, Linking } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useHeaderHeight } from "@react-navigation/elements";
-import { Linking } from "react-native";
 
 import { LegalSections } from "@/components/LegalSections";
+import { Button } from "@/components/Button";
 import { useTheme } from "@/hooks/useTheme";
 import { ThemedText } from "@/components/ThemedText";
 import { Spacing } from "@/constants/theme";
@@ -12,14 +12,23 @@ import {
   LEGAL_APP_NAME,
   LEGAL_DEVELOPER_NAME,
   LEGAL_LAST_UPDATED,
+  LEGAL_CONTACT_EMAIL,
   LEGAL_ACCOUNT_DELETION_URL,
-  PRIVACY_POLICY_SECTIONS,
+  LEGAL_PRIVACY_POLICY_URL,
+  ACCOUNT_DELETION_SECTIONS,
 } from "@shared/legal";
 
-export default function PrivacyScreen() {
+export default function AccountDeletionScreen() {
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
   const { theme } = useTheme();
+
+  const openDeletionEmail = () => {
+    const subject = encodeURIComponent(`${LEGAL_APP_NAME} Account Deletion Request`);
+    Linking.openURL(
+      `mailto:${LEGAL_CONTACT_EMAIL}?subject=${subject}`,
+    );
+  };
 
   return (
     <ScrollView
@@ -31,7 +40,7 @@ export default function PrivacyScreen() {
       }}
     >
       <ThemedText type="h2" style={styles.title}>
-        Privacy Policy
+        Account &amp; Data Deletion
       </ThemedText>
       <ThemedText style={styles.meta}>
         {LEGAL_APP_NAME} · {LEGAL_DEVELOPER_NAME}
@@ -41,13 +50,24 @@ export default function PrivacyScreen() {
       </ThemedText>
 
       <LegalSections
-        sections={PRIVACY_POLICY_SECTIONS}
+        sections={ACCOUNT_DELETION_SECTIONS}
         backgroundColor={theme.backgroundDefault}
       />
 
-      <Pressable onPress={() => Linking.openURL(LEGAL_ACCOUNT_DELETION_URL)}>
+      <Button onPress={openDeletionEmail}>Email deletion request</Button>
+
+      <Pressable
+        style={styles.webLink}
+        onPress={() => Linking.openURL(LEGAL_ACCOUNT_DELETION_URL)}
+      >
         <ThemedText style={[styles.footerLink, { color: theme.link }]}>
-          Account &amp; Data Deletion (web)
+          Open web deletion page
+        </ThemedText>
+      </Pressable>
+
+      <Pressable onPress={() => Linking.openURL(LEGAL_PRIVACY_POLICY_URL)}>
+        <ThemedText style={[styles.footerLink, { color: theme.link }]}>
+          Privacy Policy
         </ThemedText>
       </Pressable>
     </ScrollView>
@@ -68,6 +88,9 @@ const styles = StyleSheet.create({
   lastUpdated: {
     opacity: 0.6,
     marginBottom: Spacing.xl,
+  },
+  webLink: {
+    marginTop: Spacing.md,
   },
   footerLink: {
     textAlign: "center",

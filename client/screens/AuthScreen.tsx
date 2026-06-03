@@ -18,6 +18,8 @@ import { useNavigation } from "@react-navigation/native";
 import { useAuth } from "@/contexts/AuthContext";
 import { Colors, Spacing, Fonts, BorderRadius } from "@/constants/theme";
 import { AntDesign } from "@expo/vector-icons";
+import { Linking } from "react-native";
+import { LEGAL_PRIVACY_POLICY_URL } from "@shared/legal";
 
 export default function AuthScreen() {
   const insets = useSafeAreaInsets();
@@ -252,7 +254,20 @@ export default function AuthScreen() {
         </View>
 
         <Text style={styles.termsText}>
-          By continuing, you agree to our Terms of Service and Privacy Policy
+          By continuing, you agree to our{" "}
+          <Text
+            style={styles.termsLink}
+            onPress={() => navigation.navigate("Terms")}
+          >
+            Terms of Service
+          </Text>{" "}
+          and{" "}
+          <Text
+            style={styles.termsLink}
+            onPress={() => Linking.openURL(LEGAL_PRIVACY_POLICY_URL)}
+          >
+            Privacy Policy
+          </Text>
         </Text>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -424,5 +439,9 @@ const styles = StyleSheet.create({
     color: Colors.light.textSecondary,
     textAlign: "center",
     paddingHorizontal: Spacing.xl,
+  },
+  termsLink: {
+    color: Colors.light.link,
+    textDecorationLine: "underline",
   },
 });
