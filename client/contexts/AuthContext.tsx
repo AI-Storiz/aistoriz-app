@@ -60,7 +60,8 @@ const AUTH_TOKEN_KEY = "@ai_storiz_auth_token";
 const OAUTH_CONFIG_CACHE_KEY = "@ai_storiz_oauth_config";
 const OAUTH_CONFIG_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-const AUTH_FETCH_TIMEOUT_MS = 10000;
+/** Allow slow cold starts / DNS failover; production API can exceed 10s on first connect. */
+const AUTH_FETCH_TIMEOUT_MS = 30000;
 
 type ParseJsonResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
