@@ -271,16 +271,31 @@ export default function ProfileScreen() {
 
   const copyReferralCode = () => {
     const code = resolvedReferralCode;
-    if (code) {
-      Clipboard.setString(code);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      Alert.alert("Copied!", "Your referral code has been copied to clipboard.");
+    if (!code) {
+      Alert.alert(
+        "Not ready yet",
+        referralStatsLoading
+          ? "Your referral code is still loading. Please try again in a moment."
+          : "Your referral code isn't available yet. Please try again later.",
+      );
+      return;
     }
+    Clipboard.setString(code);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    Alert.alert("Copied!", "Your referral code has been copied to clipboard.");
   };
 
   const shareReferralCode = async () => {
     const code = resolvedReferralCode;
-    if (!code) return;
+    if (!code) {
+      Alert.alert(
+        "Not ready yet",
+        referralStatsLoading
+          ? "Your referral code is still loading. Please try again in a moment."
+          : "Your referral code isn't available yet. Please try again later.",
+      );
+      return;
+    }
     
     const inviteeCredits = referralStats?.inviteeCredits || 25;
     const message = INVITE_MESSAGE(code, inviteeCredits);

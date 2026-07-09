@@ -2,7 +2,7 @@
   "expo": {
     "name": "AI Storiz",
     "slug": "ai-storiz",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "aistoriz",
@@ -23,7 +23,7 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.aistoriz.storiz",
-      "versionCode": 2,
+      "versionCode": 3,
       "permissions": [
         "INTERNET",
         "READ_EXTERNAL_STORAGE",

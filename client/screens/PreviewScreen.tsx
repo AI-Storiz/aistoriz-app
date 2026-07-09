@@ -30,6 +30,7 @@ import { ComicBackground } from "@/components/ComicBackground";
 import { ComicPageWithBubbles } from "@/components/ComicPageWithBubbles";
 import { ComicPanelGrid } from "@/components/ComicPanelGrid";
 import { EditDialogueModal } from "@/components/EditDialogueModal";
+import { ModalBackdrop } from "@/components/ModalBackdrop";
 import { shareComicPageJPG, sharePDF, shareZIP, downloadToDevice, ComicPage } from "@/lib/exportService";
 import type { RootStackParamList } from "@/navigation/RootStackNavigator";
 
@@ -598,9 +599,10 @@ export default function PreviewScreen() {
         animationType="fade"
         onRequestClose={() => setShowShareModal(false)}
       >
-        <Pressable
-          style={styles.modalOverlay}
-          onPress={() => !shareLoading && setShowShareModal(false)}
+        <ModalBackdrop
+          onDismiss={() => {
+            if (!shareLoading) setShowShareModal(false);
+          }}
         >
           <View style={[styles.shareModalContent, { backgroundColor: theme.backgroundDefault }]}>
             <ThemedText type="h3" style={styles.shareModalTitle}>
@@ -681,7 +683,7 @@ export default function PreviewScreen() {
               <ThemedText type="body" style={{ color: theme.textSecondary }}>Cancel</ThemedText>
             </Pressable>
           </View>
-        </Pressable>
+        </ModalBackdrop>
       </Modal>
 
       {editingPage ? (

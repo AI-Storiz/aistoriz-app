@@ -35,6 +35,7 @@ export default function EarnCreditsScreen() {
   const [isWatching, setIsWatching] = useState(false);
   const [settings, setSettings] = useState<CreditSettings | null>(null);
   const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsError, setSettingsError] = useState(false);
   const [adsWatchedToday, setAdsWatchedToday] = useState(0);
 
   useEffect(() => {
@@ -46,14 +47,18 @@ export default function EarnCreditsScreen() {
 
   async function fetchSettings() {
     setSettingsLoading(true);
+    setSettingsError(false);
     try {
       const response = await fetch(new URL("/api/credits/settings", getApiUrl()).toString());
       if (response.ok) {
         const data = await response.json();
         setSettings(data);
+      } else {
+        setSettingsError(true);
       }
     } catch (error) {
       console.error("Failed to fetch credit settings:", error);
+      setSettingsError(true);
     } finally {
       setSettingsLoading(false);
     }
@@ -65,7 +70,12 @@ export default function EarnCreditsScreen() {
       return;
     }
     if (!settings) {
-      Alert.alert("Please wait", "Still loading reward settings. Try again in a moment.");
+      Alert.alert(
+        settingsError ? "Settings unavailable" : "Please wait",
+        settingsError
+          ? "Tap Retry above to load reward settings."
+          : "Still loading reward settings. Try again in a moment.",
+      );
       return;
     }
 
@@ -174,6 +184,15 @@ export default function EarnCreditsScreen() {
             {adsRemaining > 0 ? `${adsRemaining} ads remaining today` : "Daily limit reached"}
           </Text>
         </View>
+
+        {settingsError ? (
+          <Pressable style={styles.retryCard} onPress={fetchSettings}>
+            <Feather name="refresh-cw" size={20} color={Colors.light.primary} />
+            <Text style={styles.retryText}>
+              Couldn't load reward settings. Tap to retry.
+            </Text>
+          </Pressable>
+        ) : null}
 
         <Pressable
           style={[styles.watchButton, !canWatchAd && styles.watchButtonDisabled]}
@@ -352,6 +371,22 @@ const styles = StyleSheet.create({
     color: Colors.light.textSecondary,
     marginTop: Spacing.sm,
     textAlign: "center",
+  },
+  retryCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: Spacing.sm,
+    backgroundColor: "#FEE2E2",
+    borderRadius: BorderRadius.md,
+    padding: Spacing.md,
+    marginBottom: Spacing.lg,
+  },
+  retryText: {
+    fontFamily: Fonts.sans,
+    fontSize: 14,
+    color: Colors.light.error,
+    flex: 1,
   },
   watchButton: {
     backgroundColor: Colors.light.primary,

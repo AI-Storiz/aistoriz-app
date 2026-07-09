@@ -467,12 +467,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [token]);
 
-  const hasRequiredClientId = () => {
+  const isGoogleAuthEnabled = useMemo(() => {
     if (!oauthConfig.enabled) return false;
-    if (Platform.OS === 'android') return !!oauthConfig.googleAndroidClientId;
-    if (Platform.OS === 'ios') return !!oauthConfig.googleIosClientId;
+    if (Platform.OS === "android") return !!oauthConfig.googleAndroidClientId;
+    if (Platform.OS === "ios") return !!oauthConfig.googleIosClientId;
     return !!oauthConfig.googleWebClientId;
-  };
+  }, [
+    oauthConfig.enabled,
+    oauthConfig.googleAndroidClientId,
+    oauthConfig.googleIosClientId,
+    oauthConfig.googleWebClientId,
+  ]);
 
   const authValue = useMemo(
     () => ({
@@ -481,7 +486,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       isAuthenticated: !!user,
       isEmailVerified: user?.emailVerified ?? false,
-      isGoogleAuthEnabled: oauthConfig.enabled,
+      isGoogleAuthEnabled,
       login,
       register,
       loginWithGoogle,
@@ -495,7 +500,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       token,
       isLoading,
-      oauthConfig.enabled,
+      isGoogleAuthEnabled,
       user?.emailVerified,
       login,
       register,
@@ -510,7 +515,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider value={authValue}>
-      {oauthConfigLoaded && hasRequiredClientId() ? (
+      {oauthConfigLoaded && isGoogleAuthEnabled ? (
         <GoogleAuthInitializer
           config={{
             webClientId: oauthConfig.googleWebClientId || "",

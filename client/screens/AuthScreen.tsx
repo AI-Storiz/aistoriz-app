@@ -253,22 +253,24 @@ export default function AuthScreen() {
           </View>
         </View>
 
-        <Text style={styles.termsText}>
-          By continuing, you agree to our{" "}
-          <Text
-            style={styles.termsLink}
+        <View style={styles.termsRow}>
+          <Text style={styles.termsText}>By continuing, you agree to our </Text>
+          <Pressable
             onPress={() => navigation.navigate("Terms")}
+            hitSlop={8}
+            accessibilityRole="link"
           >
-            Terms of Service
-          </Text>{" "}
-          and{" "}
-          <Text
-            style={styles.termsLink}
+            <Text style={styles.termsLink}>Terms of Service</Text>
+          </Pressable>
+          <Text style={styles.termsText}> and </Text>
+          <Pressable
             onPress={() => Linking.openURL(LEGAL_PRIVACY_POLICY_URL)}
+            hitSlop={8}
+            accessibilityRole="link"
           >
-            Privacy Policy
-          </Text>
-        </Text>
+            <Text style={styles.termsLink}>Privacy Policy</Text>
+          </Pressable>
+        </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -432,6 +434,13 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.sans,
     fontSize: 14,
     color: Colors.light.primary,
+  },
+  termsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: Spacing.xl,
   },
   termsText: {
     fontFamily: Fonts.sans,

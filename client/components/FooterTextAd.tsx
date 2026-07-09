@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { Text, Pressable, StyleSheet, Linking } from "react-native";
+import { Text, View, Pressable, StyleSheet, Linking } from "react-native";
 import { useAds } from "@/contexts/AdsContext";
 import { Colors, Spacing } from "@/constants/theme";
 
@@ -16,22 +16,25 @@ export default function FooterTextAd() {
     return null;
   }
 
-  const handlePress = () => {
-    if (textAd.linkUrl) {
-      Linking.openURL(textAd.linkUrl);
-    }
-  };
-
-  return (
-    <Pressable
-      style={styles.container}
-      onPress={handlePress}
-      disabled={!textAd.linkUrl}
-    >
+  const content = (
+    <>
       <Text style={styles.label}>Sponsored</Text>
       <Text style={styles.content} numberOfLines={2}>
         {textAd.content}
       </Text>
+    </>
+  );
+
+  if (!textAd.linkUrl) {
+    return <View style={styles.container}>{content}</View>;
+  }
+
+  return (
+    <Pressable
+      style={styles.container}
+      onPress={() => Linking.openURL(textAd.linkUrl!)}
+    >
+      {content}
     </Pressable>
   );
 }

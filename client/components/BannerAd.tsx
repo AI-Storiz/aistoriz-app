@@ -27,32 +27,28 @@ export default function BannerAd() {
     return null;
   }
 
-  const handlePress = () => {
-    if (bannerAd.linkUrl) {
-      Linking.openURL(bannerAd.linkUrl);
-    }
-  };
+  const bannerBody = bannerAd.imageUrl ? (
+    <Image
+      source={{ uri: bannerAd.imageUrl }}
+      style={styles.bannerImage}
+      contentFit="cover"
+    />
+  ) : (
+    <View style={styles.placeholderBanner}>
+      <Text style={styles.placeholderText}>{bannerAd.title}</Text>
+    </View>
+  );
 
   return (
     <View style={styles.container}>
       <Text style={styles.label}>Sponsored</Text>
-      <Pressable
-        style={styles.bannerContainer}
-        onPress={handlePress}
-        disabled={!bannerAd.linkUrl}
-      >
-        {bannerAd.imageUrl ? (
-          <Image
-            source={{ uri: bannerAd.imageUrl }}
-            style={styles.bannerImage}
-            contentFit="cover"
-          />
-        ) : (
-          <View style={styles.placeholderBanner}>
-            <Text style={styles.placeholderText}>{bannerAd.title}</Text>
-          </View>
-        )}
-      </Pressable>
+      {bannerAd.linkUrl ? (
+        <Pressable style={styles.bannerContainer} onPress={() => Linking.openURL(bannerAd.linkUrl!)}>
+          {bannerBody}
+        </Pressable>
+      ) : (
+        <View style={styles.bannerContainer}>{bannerBody}</View>
+      )}
     </View>
   );
 }

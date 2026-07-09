@@ -29,6 +29,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "@/contexts/AuthContext";
 import { getApiUrl } from "@/lib/query-client";
 import { CharacterSelectionModal } from "@/components/CharacterSelectionModal";
+import { ModalBackdrop } from "@/components/ModalBackdrop";
 import FooterTextAd from "@/components/FooterTextAd";
 import type { RootStackParamList } from "@/navigation/RootStackNavigator";
 
@@ -821,11 +822,13 @@ export default function CreateScreen() {
             </View>
       </ScrollView>
 
-      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) + tabBarHeight }]}>
-        <Animated.View style={[styles.generateBtnWrapper, btnStyle]}>
+      <View
+        style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) + tabBarHeight }]}
+        pointerEvents="box-none"
+      >
+        <Animated.View style={[styles.generateBtnWrapper, btnStyle]} pointerEvents="auto">
           <Pressable
             style={[styles.goBtn, !isGenerateEnabled && styles.goBtnDisabled]}
-            disabled={!isGenerateEnabled}
             onPressIn={() => {
               if (isGenerateEnabled) {
                 scale.value = withSpring(0.96);
@@ -867,10 +870,7 @@ export default function CreateScreen() {
         animationType="fade"
         onRequestClose={() => setShowLanguageModal(false)}
       >
-        <Pressable 
-          style={styles.modalOverlay}
-          onPress={() => setShowLanguageModal(false)}
-        >
+        <ModalBackdrop onDismiss={() => setShowLanguageModal(false)}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Select Language</Text>
             {LANGUAGES.map((lang) => (
@@ -898,7 +898,7 @@ export default function CreateScreen() {
               </Pressable>
             ))}
           </View>
-        </Pressable>
+        </ModalBackdrop>
       </Modal>
 
       <Modal
@@ -907,10 +907,7 @@ export default function CreateScreen() {
         animationType="fade"
         onRequestClose={() => setShowPagesModal(false)}
       >
-        <Pressable 
-          style={styles.modalOverlay}
-          onPress={() => setShowPagesModal(false)}
-        >
+        <ModalBackdrop onDismiss={() => setShowPagesModal(false)}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Select Pages</Text>
             {PAGE_OPTIONS.map((count) => (
@@ -938,7 +935,7 @@ export default function CreateScreen() {
               </Pressable>
             ))}
           </View>
-        </Pressable>
+        </ModalBackdrop>
       </Modal>
 
       <Modal
@@ -947,11 +944,8 @@ export default function CreateScreen() {
         animationType="fade"
         onRequestClose={() => { setShowUnlockModal(false); setSelectedLockedStyle(null); }}
       >
-        <Pressable 
-          style={styles.modalOverlay}
-          onPress={() => { setShowUnlockModal(false); setSelectedLockedStyle(null); }}
-        >
-          <View style={styles.unlockModalContent} onStartShouldSetResponder={() => true}>
+        <ModalBackdrop onDismiss={() => { setShowUnlockModal(false); setSelectedLockedStyle(null); }}>
+          <View style={styles.unlockModalContent}>
             <View style={styles.unlockHeader}>
               <Feather name="unlock" size={28} color={COLORS.accent} />
               <Text style={styles.unlockTitle}>Unlock Art Style</Text>
@@ -1031,7 +1025,7 @@ export default function CreateScreen() {
               <Text style={styles.unlockCancelText}>Cancel</Text>
             </Pressable>
           </View>
-        </Pressable>
+        </ModalBackdrop>
       </Modal>
 
       <Modal
@@ -1040,11 +1034,8 @@ export default function CreateScreen() {
         animationType="fade"
         onRequestClose={() => { setShowConfirmModal(false); setSelectedLockedStyle(null); }}
       >
-        <Pressable
-          style={styles.modalOverlay}
-          onPress={() => { setShowConfirmModal(false); setSelectedLockedStyle(null); }}
-        >
-          <View style={styles.unlockModalContent} onStartShouldSetResponder={() => true}>
+        <ModalBackdrop onDismiss={() => { setShowConfirmModal(false); setSelectedLockedStyle(null); }}>
+          <View style={styles.unlockModalContent}>
             <View style={styles.unlockHeader}>
               <View style={styles.confirmIconCircle}>
                 <Feather name="alert-circle" size={28} color="#F59E0B" />
@@ -1110,7 +1101,7 @@ export default function CreateScreen() {
               <Text style={styles.unlockCancelText}>Go Back</Text>
             </Pressable>
           </View>
-        </Pressable>
+        </ModalBackdrop>
       </Modal>
 
       <Modal
@@ -1119,11 +1110,8 @@ export default function CreateScreen() {
         animationType="fade"
         onRequestClose={() => setShowResultModal(false)}
       >
-        <Pressable
-          style={styles.modalOverlay}
-          onPress={() => setShowResultModal(false)}
-        >
-          <View style={styles.unlockModalContent} onStartShouldSetResponder={() => true}>
+        <ModalBackdrop onDismiss={() => setShowResultModal(false)}>
+          <View style={styles.unlockModalContent}>
             <View style={styles.unlockHeader}>
               <View style={[styles.confirmIconCircle, resultSuccess ? styles.resultIconSuccess : styles.resultIconError]}>
                 <Feather
@@ -1148,7 +1136,7 @@ export default function CreateScreen() {
               </Text>
             </Pressable>
           </View>
-        </Pressable>
+        </ModalBackdrop>
       </Modal>
     </View>
   );
@@ -1668,7 +1656,6 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.05,
     shadowRadius: 12,
-    elevation: 8,
   },
   generateBtnWrapper: {
     marginBottom: 16,

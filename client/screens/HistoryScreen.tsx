@@ -9,6 +9,7 @@ import {
   Pressable,
   Platform,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
@@ -92,9 +93,18 @@ export default function HistoryScreen() {
             isReadOnly: true,
             title: comic.title,
           });
+        } else {
+          Alert.alert(
+            "Couldn't open comic",
+            "This comic couldn't be loaded right now. Please try again.",
+          );
         }
       } catch (error) {
         console.error("Error loading comic:", error);
+        Alert.alert(
+          "Couldn't open comic",
+          "Please check your connection and try again.",
+        );
       } finally {
         setLoadingComicId(null);
       }
