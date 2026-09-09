@@ -7,7 +7,7 @@ export {
 
 /** Public store / deep links for invites. Replace iOS URL with your App Store ID when live. */
 export const PLAY_STORE_URL =
-  "https://play.google.com/store/apps/details?id=com.aistoriz.storiz";
+  "https://play.google.com/store/apps/details?id=com.ai.stories.ai";
 
 /** Update with real App Store listing URL when the app is published. */
 export const APP_STORE_URL = "https://apps.apple.com/app/ai-storiz/id0000000000";

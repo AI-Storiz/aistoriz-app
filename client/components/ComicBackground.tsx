@@ -6,6 +6,7 @@ import { useTheme } from "@/hooks/useTheme";
 interface ComicBackgroundProps {
   children: React.ReactNode;
   style?: object;
+  intensity?: "low" | "medium" | "high";
 }
 
 export function ComicBackground({

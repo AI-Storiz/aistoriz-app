@@ -138,11 +138,13 @@ export const Fonts = Platform.select({
     sans: "Nunito_400Regular",
     semibold: "Nunito_600SemiBold",
     bold: "Nunito_700Bold",
+    mono: "Menlo",
   },
   default: {
     sans: "Nunito_400Regular",
     semibold: "Nunito_600SemiBold",
     bold: "Nunito_700Bold",
+    mono: "monospace",
   },
 });
 

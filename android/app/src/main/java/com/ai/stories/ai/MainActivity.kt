@@ -1,4 +1,4 @@
-package com.aistoriz.storiz
+package com.ai.stories.ai
 import expo.modules.splashscreen.SplashScreenManager
 
 import android.os.Build

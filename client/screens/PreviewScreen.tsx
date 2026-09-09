@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import * as FileSystem from "expo-file-system/legacy";
@@ -34,6 +35,7 @@ import { shareComicPageJPG, sharePDF, shareZIP, downloadToDevice, ComicPage } fr
 import type { RootStackParamList } from "@/navigation/RootStackNavigator";
 
 type RouteType = RouteProp<RootStackParamList, "Preview">;
+type NavigationProp = NativeStackNavigationProp<RootStackParamList, "Preview">;
 
 interface ExtendedComicPage {
   pageNumber: number;
@@ -53,7 +55,7 @@ const PAGE_WIDTH = width - Spacing.lg * 2;
 
 export default function PreviewScreen() {
   const insets = useSafeAreaInsets();
-  const navigation = useNavigation();
+  const navigation = useNavigation<NavigationProp>();
   const route = useRoute<RouteType>();
   const { theme } = useTheme();
   const { user, token } = useAuth();

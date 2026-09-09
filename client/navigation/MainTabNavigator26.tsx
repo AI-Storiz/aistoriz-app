@@ -1,7 +1,7 @@
 import React from "react";
 import { createNativeBottomTabNavigator } from "@react-navigation/bottom-tabs/unstable";
 
-import HomeStackNavigator from "@/navigation/HomeStackNavigator";
+import CreateStackNavigator from "@/navigation/CreateStackNavigator";
 import ProfileStackNavigator from "@/navigation/ProfileStackNavigator";
 
 export type MainTabParamList = {
@@ -21,15 +21,13 @@ export default function MainTabNavigator26() {
     >
       <Tab.Screen
         name="HomeTab"
-        component={HomeStackNavigator}
+        component={CreateStackNavigator}
         options={{
           title: "Home",
-          icon: {
-            sfSymbolName: "house",
-          },
-          selectedIcon: {
-            sfSymbolName: "house.fill",
-          },
+          tabBarIcon: ({ focused }) =>
+            focused
+              ? { type: "sfSymbol", name: "house.fill" }
+              : { type: "sfSymbol", name: "house" },
         }}
       />
       <Tab.Screen
@@ -37,12 +35,10 @@ export default function MainTabNavigator26() {
         component={ProfileStackNavigator}
         options={{
           title: "Profile",
-          icon: {
-            sfSymbolName: "person",
-          },
-          selectedIcon: {
-            sfSymbolName: "person.fill",
-          },
+          tabBarIcon: ({ focused }) =>
+            focused
+              ? { type: "sfSymbol", name: "person.fill" }
+              : { type: "sfSymbol", name: "person" },
         }}
       />
     </Tab.Navigator>

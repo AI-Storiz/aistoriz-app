@@ -29,7 +29,7 @@ export default function AboutScreen() {
           resizeMode="contain"
         />
         <ThemedText type="h1" style={styles.appName}>AI Storiz</ThemedText>
-        <ThemedText style={styles.version}>Version 1.0.0</ThemedText>
+        <ThemedText style={styles.version}>Version 1.0</ThemedText>
       </View>
 
       <View style={[styles.section, { backgroundColor: theme.backgroundDefault }]}>
