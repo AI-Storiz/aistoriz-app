@@ -211,7 +211,16 @@ async function discardLibraryComicDraftIfUnused(job: ComicJob): Promise<void> {
   job.libraryComicId = undefined;
 }
 
-const JWT_SECRET = process.env.SESSION_SECRET || "fallback-jwt-secret-key";
+function requiredProductionSecret(name: string, devFallback: string): string {
+  const value = process.env[name]?.trim();
+  if (value) return value;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(`${name} must be set in production`);
+  }
+  return devFallback;
+}
+
+const JWT_SECRET = requiredProductionSecret("SESSION_SECRET", "fallback-jwt-secret-key");
 
 // Utility function to chunk an array into batches for parallel processing
 function chunkArray<T>(array: T[], chunkSize: number): T[][] {
@@ -231,7 +240,7 @@ function generateVerificationCode(): string {
 }
 
 // Admin authentication
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
+const ADMIN_PASSWORD = requiredProductionSecret("ADMIN_PASSWORD", "admin123");
 const adminTokens = new Set<string>();
 
 function generateAdminToken(): string {

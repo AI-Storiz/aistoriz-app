@@ -63,3 +63,16 @@ pids/
 .env.local
 .env.production
 .env.development
+
+# credentials and local release artifacts
+*.pem
+*.apks
+*.apk
+*.keystore
+key-pass.txt
+store-pass.txt
+release-apk/
+bundletool*.jar
+m7-registration-log.txt
+/tatus
+/powershell

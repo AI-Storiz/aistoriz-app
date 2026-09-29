@@ -334,7 +334,7 @@ export default function GeneratingScreen() {
   const [isGenerating, setIsGenerating] = useState(true);
   const [insufficientCredits, setInsufficientCredits] = useState(false);
 
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const hasNavigatedRef = useRef(false);
   const appState = useRef(AppState.currentState);
 

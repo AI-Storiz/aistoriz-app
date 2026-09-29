@@ -3,7 +3,7 @@ import "dotenv/config";
 /**
  * Always-on comic generation worker.
  * Set before the database module loads so the pg pool uses max=5.
- * `npm run worker` also sets COMIC_WORKER via cross-env.
+ * `npm run worker` relies on this assignment, so it does not need cross-env.
  */
 process.env.COMIC_WORKER = "1";
 

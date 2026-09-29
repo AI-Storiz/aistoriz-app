@@ -29,7 +29,7 @@ function buildPoolConfig(): pg.PoolConfig {
     min: limits.min,
     max: limits.max,
     idleTimeoutMillis: limits.idleTimeoutMillis,
-    // Neon cold starts can exceed 5s; allow more time before giving up.
+    // Hosted Postgres cold starts can exceed 5s; allow more time before giving up.
     connectionTimeoutMillis: 15000,
   };
 
@@ -77,7 +77,7 @@ export async function waitForDatabase(options?: {
           `[db] Could not connect after ${attempts} attempts: ${message}`,
         );
         console.error(
-          "[db] Check DATABASE_URL, VPN/firewall, and that your Neon project is awake (open the Neon dashboard if the DB was idle).",
+          "[db] Check DATABASE_URL, VPN/firewall, and that the database accepts connections.",
         );
         return false;
       }
