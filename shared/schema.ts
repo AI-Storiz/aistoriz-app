@@ -114,7 +114,18 @@ export const comicJobs = pgTable("comic_jobs", {
   error: text("error"),
   /** Set when the finished job was persisted to `user_comics` so clients can open Preview with API image URLs. */
   libraryComicId: integer("library_comic_id"),
+  /** Full generate-comic body so the worker can run the pipeline without the HTTP request. */
+  requestPayload: jsonb("request_payload"),
+  /** Updated while a worker is running this job. Stale processing rows are failed by the worker. */
+  heartbeatAt: timestamp("heartbeat_at"),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+/** Singleton row (id = 1) holding admin AI provider settings. */
+export const aiSettings = pgTable("ai_settings", {
+  id: integer("id").primaryKey(),
+  settings: jsonb("settings").notNull(),
   updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 

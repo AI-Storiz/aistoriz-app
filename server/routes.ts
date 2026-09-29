@@ -7,7 +7,7 @@ import fs from "fs";
 import path from "path";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { storage } from "./storage";
 import {
   assertComicS3Configured,
@@ -23,7 +23,7 @@ import {
   uploadTestPngToS3,
 } from "./comicS3";
 import { db, waitForDatabase } from "./db";
-import { comicJobs } from "../shared/schema";
+import { aiSettings as aiSettingsTable, comicJobs, creditTransactions } from "../shared/schema";
 import { sendVerificationEmail, sendPasswordResetEmail, sendWelcomeEmail } from "./email";
 import { sendPushNotification, sendBroadcastNotification, sendComicCompleteNotification, sendReferralSuccessNotification } from "./notifications";
 
@@ -379,7 +379,7 @@ interface AISettings {
 
 const SETTINGS_FILE = path.join(process.cwd(), ".ai-settings.json");
 
-function loadSettings(): AISettings {
+function buildDefaultSettings(): AISettings {
   const defaultSettings: AISettings = {
     openai: {
       enabled: false,
@@ -481,84 +481,115 @@ function loadSettings(): AISettings {
       replicateModel: 'meta/meta-llama-3-70b-instruct',
     },
   };
-
-  try {
-    if (fs.existsSync(SETTINGS_FILE)) {
-      const stored = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf-8"));
-      const merged = { ...defaultSettings, ...stored };
-      if (stored.replicate) {
-        merged.replicate = {
-          ...defaultSettings.replicate,
-          ...stored.replicate,
-          models: {
-            ...defaultSettings.replicate.models,
-            ...(stored.replicate.models || {})
-          }
-        };
-      }
-      if (stored.siliconflow) {
-        merged.siliconflow = {
-          ...defaultSettings.siliconflow,
-          ...stored.siliconflow,
-          models: {
-            ...defaultSettings.siliconflow.models,
-            ...(stored.siliconflow.models || {})
-          }
-        };
-      }
-      if (stored.flux2pro) {
-        merged.flux2pro = {
-          ...defaultSettings.flux2pro,
-          ...stored.flux2pro,
-          models: {
-            ...defaultSettings.flux2pro.models,
-            ...(stored.flux2pro.models || {})
-          }
-        };
-      }
-      if (stored.geminiImage) {
-        merged.geminiImage = {
-          ...defaultSettings.geminiImage,
-          ...stored.geminiImage,
-          models: {
-            ...defaultSettings.geminiImage.models,
-            ...(stored.geminiImage.models || {})
-          }
-        };
-      }
-      if (stored.storyTextProvider) {
-        merged.storyTextProvider = {
-          ...defaultSettings.storyTextProvider,
-          ...stored.storyTextProvider,
-        };
-      }
-      return merged;
-    }
-  } catch (error) {
-    console.error("Error loading settings:", error);
-  }
   return defaultSettings;
 }
 
-function saveSettings(settings: AISettings): void {
-  try {
-    const toSave = {
-      ...settings,
-      openai: { ...settings.openai },
-      replicate: { ...settings.replicate },
-      siliconflow: { ...settings.siliconflow },
-      flux2pro: { ...settings.flux2pro },
-      stability: { ...settings.stability },
-      geminiImage: { ...settings.geminiImage },
-      storyTextProvider: { ...settings.storyTextProvider },
+function mergeStoredSettings(stored: Partial<AISettings> | null | undefined): AISettings {
+  const defaultSettings = buildDefaultSettings();
+  if (!stored) return defaultSettings;
+  const merged = { ...defaultSettings, ...stored };
+  if (stored.replicate) {
+    merged.replicate = {
+      ...defaultSettings.replicate,
+      ...stored.replicate,
+      models: {
+        ...defaultSettings.replicate.models,
+        ...(stored.replicate.models || {})
+      }
     };
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(toSave, null, 2));
+  }
+  if (stored.siliconflow) {
+    merged.siliconflow = {
+      ...defaultSettings.siliconflow,
+      ...stored.siliconflow,
+      models: {
+        ...defaultSettings.siliconflow.models,
+        ...(stored.siliconflow.models || {})
+      }
+    };
+  }
+  if (stored.flux2pro) {
+    merged.flux2pro = {
+      ...defaultSettings.flux2pro,
+      ...stored.flux2pro,
+      models: {
+        ...defaultSettings.flux2pro.models,
+        ...(stored.flux2pro.models || {})
+      }
+    };
+  }
+  if (stored.geminiImage) {
+    merged.geminiImage = {
+      ...defaultSettings.geminiImage,
+      ...stored.geminiImage,
+      models: {
+        ...defaultSettings.geminiImage.models,
+        ...(stored.geminiImage.models || {})
+      }
+    };
+  }
+  if (stored.storyTextProvider) {
+    merged.storyTextProvider = {
+      ...defaultSettings.storyTextProvider,
+      ...stored.storyTextProvider,
+    };
+  }
+  return merged;
+}
+
+function readLegacySettingsFile(): AISettings | null {
+  try {
+    if (!fs.existsSync(SETTINGS_FILE)) return null;
+    const stored = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf-8"));
+    console.log("[ai-settings] Importing .ai-settings.json into ai_settings");
+    return mergeStoredSettings(stored);
   } catch (error) {
-    console.error("Error saving settings:", error);
+    console.error("Error loading .ai-settings.json:", error);
+    return null;
   }
 }
 
-let aiSettings = loadSettings();
+let aiSettings: AISettings = buildDefaultSettings();
+
+/** Load the singleton `ai_settings` row. Imports `.ai-settings.json` once when the row is missing. */
+export async function ensureAiSettingsLoaded(): Promise<AISettings> {
+  const [existing] = await db.select().from(aiSettingsTable).where(eq(aiSettingsTable.id, 1));
+  if (existing?.settings) {
+    aiSettings = mergeStoredSettings(existing.settings as Partial<AISettings>);
+    return aiSettings;
+  }
+
+  const imported = readLegacySettingsFile() ?? buildDefaultSettings();
+  await db
+    .insert(aiSettingsTable)
+    .values({ id: 1, settings: imported, updatedAt: new Date() })
+    .onConflictDoNothing();
+
+  const [row] = await db.select().from(aiSettingsTable).where(eq(aiSettingsTable.id, 1));
+  aiSettings = mergeStoredSettings((row?.settings as Partial<AISettings> | undefined) ?? imported);
+  return aiSettings;
+}
+
+async function saveSettings(settings: AISettings): Promise<void> {
+  const toSave: AISettings = {
+    ...settings,
+    openai: { ...settings.openai },
+    replicate: { ...settings.replicate },
+    siliconflow: { ...settings.siliconflow },
+    flux2pro: { ...settings.flux2pro },
+    stability: { ...settings.stability },
+    geminiImage: { ...settings.geminiImage },
+    storyTextProvider: { ...settings.storyTextProvider },
+  };
+  await db
+    .insert(aiSettingsTable)
+    .values({ id: 1, settings: toSave, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: aiSettingsTable.id,
+      set: { settings: toSave, updatedAt: new Date() },
+    });
+  aiSettings = toSave;
+}
 
 function getOpenAIClient(): OpenAI {
   // Only use admin-configured API key - no Replit fallbacks
@@ -742,9 +773,9 @@ interface ComicJob {
   libraryRowTitleSynced?: string;
   error?: string;
   createdAt: number;
+  /** Persisted on insert so the worker can resume the pipeline. Not required on later saves. */
+  requestPayload?: GenerateComicRequest;
 }
-
-const jobsCache = new Map<string, ComicJob>();
 
 function userFacingJobPersistError(err: unknown): string {
   if (err instanceof ComicS3Error) {
@@ -781,6 +812,7 @@ async function saveJobToDb(job: ComicJob): Promise<void> {
         ? (stripNonAssetImagesFromComicPagesJson(job.pages) as ComicPage[])
         : job.pages;
 
+    const heartbeatAt = new Date();
     const existingJob = await db.select().from(comicJobs).where(eq(comicJobs.id, job.id)).limit(1);
     if (existingJob.length > 0) {
       await db.update(comicJobs).set({
@@ -790,7 +822,9 @@ async function saveJobToDb(job: ComicJob): Promise<void> {
         pages: pagesColumn,
         error: job.error || null,
         libraryComicId: job.libraryComicId ?? null,
-        updatedAt: new Date(),
+        heartbeatAt,
+        ...(job.requestPayload ? { requestPayload: job.requestPayload } : {}),
+        updatedAt: heartbeatAt,
       }).where(eq(comicJobs.id, job.id));
     } else {
       await db.insert(comicJobs).values({
@@ -804,7 +838,9 @@ async function saveJobToDb(job: ComicJob): Promise<void> {
         pages: pagesColumn,
         error: job.error || null,
         libraryComicId: job.libraryComicId ?? null,
-        updatedAt: new Date(),
+        requestPayload: job.requestPayload ?? null,
+        heartbeatAt,
+        updatedAt: heartbeatAt,
       })
       .onConflictDoUpdate({
         target: comicJobs.id,
@@ -818,18 +854,18 @@ async function saveJobToDb(job: ComicJob): Promise<void> {
           pages: job.pages,
           error: job.error || null,
           libraryComicId: job.libraryComicId ?? null,
-          updatedAt: new Date(),
+          ...(job.requestPayload ? { requestPayload: job.requestPayload } : {}),
+          heartbeatAt,
+          updatedAt: heartbeatAt,
         },
       });
     }
     job.pages = pagesColumn;
-    jobsCache.set(job.id, job);
   } catch (error) {
     console.error("Error saving job to database:", error);
     if (!job.error) {
       job.error = userFacingJobPersistError(error);
     }
-    jobsCache.set(job.id, job);
     try {
       await db
         .update(comicJobs)
@@ -845,10 +881,6 @@ async function saveJobToDb(job: ComicJob): Promise<void> {
 }
 
 async function getJobFromDb(jobId: string): Promise<ComicJob | null> {
-  if (jobsCache.has(jobId)) {
-    return jobsCache.get(jobId)!;
-  }
-  
   try {
     const result = await db.select().from(comicJobs).where(eq(comicJobs.id, jobId)).limit(1);
     if (result.length > 0) {
@@ -866,42 +898,12 @@ async function getJobFromDb(jobId: string): Promise<ComicJob | null> {
         libraryComicId: dbJob.libraryComicId ?? undefined,
         createdAt: new Date(dbJob.createdAt).getTime(),
       };
-      jobsCache.set(jobId, job);
       return job;
     }
   } catch (error) {
     console.error("Error loading job from database:", error);
   }
   return null;
-}
-
-// Recover stuck jobs on server startup - mark any "processing" jobs as failed
-async function recoverStuckJobs(): Promise<void> {
-  try {
-    const stuckJobs = await db.select().from(comicJobs)
-      .where(eq(comicJobs.status, "processing"));
-    
-    if (stuckJobs.length > 0) {
-      console.log(`Found ${stuckJobs.length} stuck job(s), marking as failed...`);
-      for (const job of stuckJobs) {
-        if (job.userId && job.libraryComicId != null) {
-          await storage.deleteUserComic(job.libraryComicId, job.userId).catch(() => {
-            /* best-effort: draft row may already be gone */
-          });
-        }
-        await db.update(comicJobs).set({
-          status: "failed",
-          error: "Server restarted during generation. Please try again.",
-          libraryComicId: null,
-          pages: [],
-          updatedAt: new Date(),
-        }).where(eq(comicJobs.id, job.id));
-        console.log(`Marked job ${job.id} as failed (was ${job.progress}% complete)`);
-      }
-    }
-  } catch (error) {
-    console.error("Error recovering stuck jobs:", error);
-  }
 }
 
 function getActiveReplicateModel(): { modelId: string; name: string } | null {
@@ -2583,15 +2585,29 @@ PANEL BORDER RESPECT (CRITICAL — ZERO TOLERANCE):
   }
 }
 
-async function refundCreditsForFailedJob(job: ComicJob): Promise<void> {
+export async function refundCreditsForFailedJob(job: ComicJob): Promise<void> {
   if (!job.userId) return;
+  const description = `Refund: generation failed (${job.id})`;
   try {
+    const [alreadyRefunded] = await db
+      .select({ id: creditTransactions.id })
+      .from(creditTransactions)
+      .where(
+        and(
+          eq(creditTransactions.usersId, job.userId),
+          eq(creditTransactions.type, "comic_refund"),
+          eq(creditTransactions.description, description),
+        ),
+      )
+      .limit(1);
+    if (alreadyRefunded) return;
+
     const settings = await storage.getCreditSettings();
     const numPages = job.pagesCount ?? 6;
     const additionalPages = Math.max(0, numPages - 1);
     const totalCost = settings.baseCost + additionalPages * settings.costPerPage;
     await storage.updateUserCredits(job.userId, totalCost);
-    await storage.recordTransaction(job.userId, totalCost, "comic_refund", "Refund: generation failed");
+    await storage.recordTransaction(job.userId, totalCost, "comic_refund", description);
     console.log(`Refunded ${totalCost} credits to user ${job.userId} after generation failure`);
   } catch (refundError: any) {
     console.error("Failed to refund credits:", refundError);
@@ -2699,7 +2715,8 @@ function buildNarrativeArcForFullPage(totalPages: number): string {
   return parts.join('\n\n');
 }
 
-async function processComicJob(jobId: string, params: GenerateComicRequest) {
+export async function processComicJob(jobId: string, params: GenerateComicRequest) {
+  await ensureAiSettingsLoaded();
   if (aiSettings.comicGenerationMode === 'gemini-fullpage') {
     console.log(`=== Using GEMINI FULL-PAGE generation mode ===`);
     return processComicJobGeminiFullPage(jobId, params);
@@ -3960,6 +3977,11 @@ async function runStartupDatabaseTasks(): Promise<void> {
 export async function registerRoutes(app: Express): Promise<Server> {
   assertComicS3Configured();
   void runStartupDatabaseTasks();
+  try {
+    await ensureAiSettingsLoaded();
+  } catch (error) {
+    console.error("[ai-settings] Failed to load from database:", error);
+  }
 
   if (process.env.NODE_ENV === "production") {
     app.use((req: Request, res: Response, next: NextFunction) => {
@@ -4009,8 +4031,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Protected: Get settings
-  app.get("/api/admin/settings", requireAuth, (req: Request, res: Response) => {
-    const settings = loadSettings();
+  app.get("/api/admin/settings", requireAuth, async (req: Request, res: Response) => {
+    try {
+      await ensureAiSettingsLoaded();
+    } catch (error) {
+      console.error("Error loading settings:", error);
+      res.status(500).json({ error: "Failed to load settings" });
+      return;
+    }
+    const settings = aiSettings;
     const maskedSettings = {
       openai: {
         enabled: settings.openai.enabled,
@@ -4062,11 +4091,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Protected: Update settings
-  app.post("/api/admin/settings", requireAuth, (req: Request, res: Response) => {
+  app.post("/api/admin/settings", requireAuth, async (req: Request, res: Response) => {
     try {
       const newSettings = req.body as AISettings;
 
-      const currentSettings = loadSettings();
+      await ensureAiSettingsLoaded();
+      const currentSettings = structuredClone(aiSettings);
 
       if (newSettings.openai.apiKey && !newSettings.openai.apiKey.startsWith("****")) {
         currentSettings.openai.apiKey = newSettings.openai.apiKey;
@@ -4184,8 +4214,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      saveSettings(currentSettings);
-      aiSettings = currentSettings;
+      await saveSettings(currentSettings);
 
       res.json({ success: true });
     } catch (error: any) {
@@ -5203,6 +5232,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Upload a character reference photo for generate-comic (returns a public HTTPS asset URL).
+  app.post("/api/character-photos", requireUserAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req as any).userId;
+      const { photoUri } = req.body;
+      if (typeof photoUri !== "string" || !photoUri.trim()) {
+        return res.status(400).json({ error: "photoUri is required" });
+      }
+      const imgSize = getBase64ImageSize(photoUri);
+      if (imgSize !== null && imgSize > MAX_CHARACTER_IMAGE_BYTES) {
+        return res.status(400).json({ error: "Character image too large. Maximum size is 5MB." });
+      }
+      const url = await uploadCharacterPhotoToS3OrThrow(userId, photoUri.trim());
+      res.json({ url });
+    } catch (e) {
+      if (e instanceof ComicS3Error) {
+        return res
+          .status(e.code === "S3_NOT_CONFIGURED" ? 503 : 422)
+          .json(comicS3ErrorPayload(e));
+      }
+      console.error("Upload character photo error:", e);
+      res.status(500).json({ error: "Failed to upload character photo" });
+    }
+  });
+
   // Update a character
   app.put("/api/characters/:id", requireUserAuth, async (req: Request, res: Response) => {
     try {
@@ -5628,6 +5682,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     const jobId = crypto.randomUUID();
     const characterNames = (characters || []).map((c) => c.name).filter(Boolean);
+    const requestPayload: GenerateComicRequest = {
+      storyPrompt,
+      style,
+      characters: characters || [],
+      pagesCount: numPages,
+      scenesPerPage,
+      title,
+      language,
+    };
     const job: ComicJob = {
       id: jobId,
       userId,
@@ -5638,6 +5701,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       pagesCount: numPages,
       pages: [],
       characterNames,
+      requestPayload,
       createdAt: Date.now(),
     };
 
@@ -5655,7 +5719,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       return res.status(500).json({ error: "Could not start comic generation. Your credits were refunded." });
     }
-    console.log(`Job ${jobId} created for user ${userId} and stored in database`);
+    console.log(`Job ${jobId} queued for user ${userId}`);
 
     // Log generation started
     await storage.createAuditLog({
@@ -5670,8 +5734,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       userAgent,
       metadata: { jobId, title, language, charactersCount: characters?.length || 0 },
     });
-
-    processComicJob(jobId, { storyPrompt, style, characters, pagesCount, scenesPerPage, title, language });
 
     res.json({ jobId, creditsDeducted: totalCost, newBalance: updatedUser?.credits || 0 });
   });
@@ -5727,6 +5789,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/inspire-me", async (req: Request, res: Response) => {
     try {
+      await ensureAiSettingsLoaded();
       const { genre, characters } = req.body;
 
       const inspireSystemPrompt = "You are a creative story idea generator. Generate 3 short, engaging story prompts suitable for comic creation. Each prompt should be 2-3 sentences. Respond with JSON: { \"ideas\": [\"idea1\", \"idea2\", \"idea3\"] }";
@@ -6225,4 +6288,3 @@ export async function registerRoutes(app: Express): Promise<Server> {
 }
 
 // Export job recovery function for use on server startup
-export { recoverStuckJobs };

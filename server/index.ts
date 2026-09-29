@@ -1,14 +1,13 @@
 import "dotenv/config";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
-import { registerRoutes, recoverStuckJobs } from "./routes";
-import { waitForDatabase } from "./db";
+import { registerRoutes } from "./routes";
 import * as legal from "../shared/legal";
 import * as fs from "fs";
 import * as path from "path";
 import { createProxyMiddleware } from "http-proxy-middleware";
 
-const app = express();
+export const app = express();
 const log = console.log;
 const isDev = process.env.NODE_ENV !== "production";
 
@@ -96,14 +95,14 @@ function setupCors(app: express.Application) {
 function setupBodyParsing(app: express.Application) {
   app.use(
     express.json({
-      limit: '100mb',
+      limit: "4mb",
       verify: (req, _res, buf) => {
         req.rawBody = buf;
       },
     }),
   );
 
-  app.use(express.urlencoded({ extended: false, limit: '100mb' }));
+  app.use(express.urlencoded({ extended: false, limit: "4mb" }));
 }
 
 function setupRequestLogging(app: express.Application) {
@@ -363,45 +362,58 @@ function setupErrorHandler(app: express.Application) {
   });
 }
 
-(async () => {
-  setupCors(app);
-  setupBodyParsing(app);
-  setupRequestLogging(app);
+let bootPromise: Promise<void> | null = null;
 
-  // Register API routes FIRST (before proxy) so they take precedence
-  const server = await registerRoutes(app);
+/** Build routes once. Listens only when this process is not a Vercel function. */
+export function bootApp(): Promise<void> {
+  if (bootPromise) return bootPromise;
+  bootPromise = (async () => {
+    setupCors(app);
+    setupBodyParsing(app);
+    setupRequestLogging(app);
 
-  const dbReady = await waitForDatabase();
-  if (dbReady) {
-    await recoverStuckJobs();
-    log("Job recovery check completed");
-  } else {
-    log("Job recovery skipped — database unavailable");
-  }
+    const server = await registerRoutes(app);
 
-  registerLegalPages(app);
+    registerLegalPages(app);
+    configureExpoAndLanding(app);
+    setupErrorHandler(app);
 
-  // Then set up Expo/landing page handling (includes proxy in dev mode)
-  configureExpoAndLanding(app);
+    if (process.env.VERCEL) {
+      return;
+    }
 
-  setupErrorHandler(app);
+    const port = parseInt(process.env.PORT || "5001", 10);
+    const listenOptions: {
+      port: number;
+      host: string;
+      reusePort?: boolean;
+    } = {
+      port,
+      host: "0.0.0.0",
+    };
 
-  const port = parseInt(process.env.PORT || "5001", 10);
-  const listenOptions: {
-    port: number;
-    host: string;
-    reusePort?: boolean;
-  } = {
-    port,
-    host: "0.0.0.0",
-  };
+    // SO_REUSEPORT is only safe to enable on Linux. Windows and macOS return ENOTSUP.
+    if (process.platform === "linux") {
+      listenOptions.reusePort = true;
+    }
 
-  // SO_REUSEPORT is only safe to enable on Linux. Windows and macOS return ENOTSUP.
-  if (process.platform === "linux") {
-    listenOptions.reusePort = true;
-  }
-
-  server.listen(listenOptions, () => {
-    log(`express server serving on port ${port}`);
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(listenOptions, () => {
+        log(`express server serving on port ${port}`);
+        resolve();
+      });
+    });
+  })().catch((err) => {
+    bootPromise = null;
+    throw err;
   });
-})();
+  return bootPromise;
+}
+
+if (!process.env.VERCEL) {
+  void bootApp().catch((err) => {
+    console.error("Failed to start server:", err);
+    process.exit(1);
+  });
+}

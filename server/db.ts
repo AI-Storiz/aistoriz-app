@@ -10,12 +10,25 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
+function poolLimits(): { min: number; max: number; idleTimeoutMillis: number } {
+  if (process.env.VERCEL) {
+    return { min: 0, max: 1, idleTimeoutMillis: 10000 };
+  }
+  if (process.env.COMIC_WORKER === "1") {
+    return { min: 0, max: 5, idleTimeoutMillis: 30000 };
+  }
+  const min = process.env.NODE_ENV === "production" ? 2 : 1;
+  return { min, max: 10, idleTimeoutMillis: 30000 };
+}
+
 function buildPoolConfig(): pg.PoolConfig {
   const connectionString = process.env.DATABASE_URL!;
+  const limits = poolLimits();
   const config: pg.PoolConfig = {
     connectionString,
-    min: process.env.NODE_ENV === "production" ? 2 : 1,
-    idleTimeoutMillis: 30000,
+    min: limits.min,
+    max: limits.max,
+    idleTimeoutMillis: limits.idleTimeoutMillis,
     // Neon cold starts can exceed 5s; allow more time before giving up.
     connectionTimeoutMillis: 15000,
   };
@@ -27,7 +40,8 @@ function buildPoolConfig(): pg.PoolConfig {
     const needsSsl =
       sslmode === "require" ||
       host.includes("neon.tech") ||
-      host.includes("supabase.co");
+      host.includes("supabase.co") ||
+      host.includes("pooler.supabase.com");
 
     if (needsSsl) {
       config.ssl = { rejectUnauthorized: true };

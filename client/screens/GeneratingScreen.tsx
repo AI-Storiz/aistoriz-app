@@ -215,28 +215,64 @@ async function convertImageToBase64(uri: string): Promise<string | null> {
   }
 }
 
-async function prepareCharactersWithBase64Images(
-  characters: CharacterWithImage[]
+function isRemoteHttpUrl(uri: string): boolean {
+  return uri.startsWith("https://") || uri.startsWith("http://");
+}
+
+async function uploadCharacterImageForGenerate(
+  uri: string,
+  token: string | null | undefined,
+): Promise<string | null> {
+  if (isRemoteHttpUrl(uri)) {
+    return uri;
+  }
+
+  const dataUri = await convertImageToBase64(uri);
+  if (!dataUri) return null;
+  if (isRemoteHttpUrl(dataUri)) {
+    return dataUri;
+  }
+
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(new URL("/api/character-photos", getApiUrl()).href, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ photoUri: dataUri }),
+  });
+  if (!response.ok) {
+    return null;
+  }
+  const payload = (await response.json()) as { url?: string };
+  return typeof payload.url === "string" && payload.url.trim() ? payload.url : null;
+}
+
+async function prepareCharactersWithStorageUrls(
+  characters: CharacterWithImage[],
+  token: string | null | undefined,
 ): Promise<CharacterWithImage[]> {
-  const preparedCharacters = await Promise.all(
+  return Promise.all(
     characters.map(async (char) => {
-      if (char.imageUri) {
-        const base64Uri = await convertImageToBase64(char.imageUri);
-        if (base64Uri) {
-          return { ...char, imageUri: base64Uri };
-        }
-        console.warn(`Failed to convert image for "${char.name}" - retrying once...`);
-        const retryUri = await convertImageToBase64(char.imageUri);
-        if (retryUri) {
-          return { ...char, imageUri: retryUri };
-        }
-        console.warn(`Retry also failed for "${char.name}" - keeping original URI as fallback`);
-        return { ...char, imageUri: char.imageUri };
+      if (!char.imageUri) return char;
+      const uploaded = await uploadCharacterImageForGenerate(char.imageUri, token);
+      if (uploaded) {
+        return { ...char, imageUri: uploaded };
       }
-      return char;
-    })
+      console.warn(`Failed to upload image for "${char.name}" - retrying once...`);
+      const retryUrl = await uploadCharacterImageForGenerate(char.imageUri, token);
+      if (retryUrl) {
+        return { ...char, imageUri: retryUrl };
+      }
+      if (char.imageUri.startsWith("data:")) {
+        throw new Error("Failed to upload character image. Please try again.");
+      }
+      console.warn(`Retry also failed for "${char.name}" - keeping original URI as fallback`);
+      return { ...char, imageUri: char.imageUri };
+    }),
   );
-  return preparedCharacters;
 }
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -357,9 +393,9 @@ export default function GeneratingScreen() {
       
       setProgress(5);
 
-      // Convert local character images to base64 for the server
-      // This enables FLUX Kontext to use them as reference images for visual consistency
-      const preparedCharacters = await prepareCharactersWithBase64Images(characters || []);
+      // Upload local character images to storage first so generate-comic stays under 4 MB.
+      // Existing HTTPS asset URLs are sent as-is (no re-upload).
+      const preparedCharacters = await prepareCharactersWithStorageUrls(characters || [], token);
       
       const charactersWithImages = preparedCharacters.filter(c => c.imageUri);
       if (charactersWithImages.length > 0) {

@@ -1,9 +1,10 @@
 import { randomBytes } from "node:crypto";
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import pLimit from "p-limit";
 
-const BUCKET = (process.env.COMIC_S3_BUCKET || "").trim();
-const REGION = (process.env.COMIC_S3_REGION || process.env.AWS_REGION || "us-east-1").trim();
+const BUCKET = (process.env.COMIC_STORAGE_BUCKET || "").trim();
+const SUPABASE_URL = (process.env.SUPABASE_URL || "").trim().replace(/\/$/, "");
+const SERVICE_ROLE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 const PREFIX = (process.env.COMIC_S3_KEY_PREFIX || "comic-assets").replace(/^\/+|\/+$/g, "");
 
 const UPLOAD_CONCURRENCY = (() => {
@@ -46,56 +47,56 @@ async function fetchRemoteImageForIngest(url: string): Promise<Response> {
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
-/** Public base (CDN or S3 virtual-hosted) used in stored URLs — fixed at process start. */
-const PUBLIC_BASE: string = (() => {
-  const cdn = process.env.COMIC_CDN_BASE_URL?.replace(/\/$/, "");
-  if (cdn) {
-    return cdn;
+/** Public base used in newly stored URLs — Supabase public object URL, fixed at process start. */
+const PUBLIC_BASE: string = SUPABASE_URL && BUCKET
+  ? `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}`
+  : "";
+
+function addOrigin(set: Set<string>, raw: string | undefined): void {
+  const t = (raw ?? "").trim();
+  if (!t) return;
+  try {
+    set.add(new URL(t).origin);
+  } catch {
+    /* invalid URL ignored */
   }
-  return `https://${BUCKET}.s3.${REGION}.amazonaws.com`;
-})();
+}
 
 const ALLOWED_ORIGINS: ReadonlySet<string> = (() => {
   const s = new Set<string>();
-  if (process.env.COMIC_CDN_BASE_URL) {
-    try {
-      s.add(new URL(process.env.COMIC_CDN_BASE_URL).origin);
-    } catch {
-      /* invalid URL ignored */
-    }
+  addOrigin(s, SUPABASE_URL);
+  const legacy = process.env.COMIC_LEGACY_ASSET_ORIGINS || "";
+  for (const part of legacy.split(",")) {
+    addOrigin(s, part);
   }
-  if (BUCKET) {
-    s.add(`https://${BUCKET}.s3.${REGION}.amazonaws.com`);
-    s.add(`https://${BUCKET}.s3.amazonaws.com`);
+  addOrigin(s, process.env.COMIC_CDN_BASE_URL);
+  const legacyBucket = (process.env.COMIC_S3_BUCKET || "").trim();
+  const legacyRegion = (process.env.COMIC_S3_REGION || process.env.AWS_REGION || "us-east-1").trim();
+  if (legacyBucket) {
+    s.add(`https://${legacyBucket}.s3.${legacyRegion}.amazonaws.com`);
+    s.add(`https://${legacyBucket}.s3.amazonaws.com`);
   }
   return s;
 })();
 
-let s3: S3Client | null = null;
+let supabase: SupabaseClient | null = null;
 
-/**
- * When both are set, use them explicitly (trimmed). Trailing newlines in .env often break signing.
- * Otherwise the SDK uses the default provider chain (IAM role, instance profile, etc.).
- */
-function getEnvAwsCredentials(): { accessKeyId: string; secretAccessKey: string } | undefined {
-  const id = process.env.AWS_ACCESS_KEY_ID?.trim();
-  const sec = process.env.AWS_SECRET_ACCESS_KEY?.trim();
-  if (id && sec) {
-    return { accessKeyId: id, secretAccessKey: sec };
+function storageHost(): string {
+  if (!SUPABASE_URL) return "";
+  try {
+    return new URL(SUPABASE_URL).host;
+  } catch {
+    return "";
   }
-  return undefined;
 }
 
-function getClient(): S3Client {
-  if (!s3) {
-    const credentials = getEnvAwsCredentials();
-    s3 = new S3Client(
-      credentials
-        ? { region: REGION, credentials }
-        : { region: REGION }
-    );
+function getClient(): SupabaseClient {
+  if (!supabase) {
+    supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
   }
-  return s3;
+  return supabase;
 }
 
 export class ComicS3Error extends Error {
@@ -131,8 +132,11 @@ export function comicS3ErrorPayload(
 }
 
 export function assertComicS3Configured(): void {
-  if (!BUCKET) {
-    throw new ComicS3Error("COMIC_S3_BUCKET is required", "S3_NOT_CONFIGURED");
+  if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !BUCKET) {
+    throw new ComicS3Error(
+      "SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and COMIC_STORAGE_BUCKET are required",
+      "S3_NOT_CONFIGURED",
+    );
   }
 }
 
@@ -394,36 +398,20 @@ async function putS3ObjectOrThrow(
   contentType: string,
   cacheControl: string
 ): Promise<void> {
-  try {
-    await getClient().send(
-      new PutObjectCommand({
-        Bucket: BUCKET,
-        Key: key,
-        Body: body,
-        ContentType: contentType,
-        CacheControl: cacheControl,
-      })
-    );
-  } catch (e) {
-    const name = e && typeof e === "object" && "name" in e ? String((e as { name: string }).name) : "Error";
-    const msg = e && typeof e === "object" && "message" in e ? String((e as { message: string }).message) : String(e);
-    const meta =
-      e && typeof e === "object" && "$metadata" in e
-        ? (e as { $metadata?: { httpStatusCode?: number; requestId?: string } }).$metadata
-        : undefined;
-    const reqId = meta?.requestId ? ` requestId=${meta.requestId}` : "";
-    const detail = `${name}: ${msg}${reqId}`.trim();
-    console.error(`[comicS3] PutObject failed`, {
-      bucket: BUCKET,
-      key,
-      region: REGION,
-      name,
-      message: msg,
-      httpStatus: meta?.httpStatusCode,
-      requestId: meta?.requestId,
-    });
-    throw new ComicS3Error("S3 upload failed", "INGEST_FAILED", detail);
-  }
+  const { error } = await getClient().storage.from(BUCKET).upload(key, body, {
+    contentType,
+    cacheControl,
+    upsert: false,
+  });
+  if (!error) return;
+  const detail = `${error.name || "StorageError"}: ${error.message}`.trim();
+  console.error(`[comicS3] Storage upload failed`, {
+    bucket: BUCKET,
+    key,
+    name: error.name,
+    message: error.message,
+  });
+  throw new ComicS3Error("S3 upload failed", "INGEST_FAILED", detail);
 }
 
 const PING_PNG_1X1 = Buffer.from(
@@ -448,7 +436,7 @@ export async function uploadTestPngToS3(userId: string): Promise<{
     url: publicObjectUrl(key),
     durationMs: Date.now() - t0,
     bucket: BUCKET,
-    region: REGION,
+    region: storageHost(),
   };
 }
 
