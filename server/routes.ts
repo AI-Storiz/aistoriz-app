@@ -601,20 +601,24 @@ async function saveSettings(settings: AISettings): Promise<void> {
   aiSettings = toSave;
 }
 
+function isUsableOpenAIKey(apiKey: string | undefined | null): apiKey is string {
+  return !!apiKey &&
+    !apiKey.includes("DUMMY") &&
+    apiKey.length > 10 &&
+    apiKey.startsWith("sk-");
+}
+
 function getOpenAIClient(): OpenAI {
-  // Only use admin-configured API key - no Replit fallbacks
   const adminKey = aiSettings.openai.apiKey;
-  const isValidAdminKey = adminKey && 
-                          !adminKey.includes('DUMMY') && 
-                          adminKey.length > 10 &&
-                          adminKey.startsWith('sk-');
-  
-  if (!isValidAdminKey) {
+  const envKey = process.env.OPENAI_API_KEY?.trim();
+  const apiKey = isUsableOpenAIKey(adminKey) ? adminKey : envKey;
+
+  if (!isUsableOpenAIKey(apiKey)) {
     throw new Error("OpenAI API key not configured. Please set a valid API key in the admin panel.");
   }
-  
+
   return new OpenAI({
-    apiKey: adminKey,
+    apiKey,
     baseURL: "https://api.openai.com/v1",
   });
 }
