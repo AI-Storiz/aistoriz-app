@@ -3142,25 +3142,20 @@ async function saveSettings(settings) {
   });
   aiSettings2 = toSave;
 }
-function isStoredOpenAIKey(apiKey) {
+function isUsableOpenAIKey(apiKey) {
   return !!apiKey && !apiKey.includes("DUMMY") && apiKey.length > 10 && apiKey.startsWith("sk-");
 }
 function getOpenAIClient() {
   const adminKey = aiSettings2.openai.apiKey;
-  if (isStoredOpenAIKey(adminKey)) {
-    return new OpenAI({
-      apiKey: adminKey,
-      baseURL: "https://api.openai.com/v1"
-    });
+  const envKey = process.env.OPENAI_API_KEY?.trim();
+  const apiKey = isUsableOpenAIKey(adminKey) ? adminKey : envKey;
+  if (!isUsableOpenAIKey(apiKey)) {
+    throw new Error("OpenAI API key not configured. Please set a valid API key in the admin panel.");
   }
-  const envKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY?.trim();
-  if (envKey && !envKey.includes("DUMMY") && envKey.length > 10) {
-    return new OpenAI({
-      apiKey: envKey,
-      baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1"
-    });
-  }
-  throw new Error("OpenAI API key not configured. Please set a valid API key in the admin panel.");
+  return new OpenAI({
+    apiKey,
+    baseURL: "https://api.openai.com/v1"
+  });
 }
 async function generateTextWithGemini(systemPrompt, userPrompt, model, apiKey, responseFormat) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
