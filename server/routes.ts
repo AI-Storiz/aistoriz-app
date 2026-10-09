@@ -23,6 +23,7 @@ import {
   uploadTestPngToS3,
 } from "./comicS3";
 import { db, waitForDatabase } from "./db";
+import { scheduleComicWorker } from "./worker";
 import { aiSettings as aiSettingsTable, comicJobs, creditTransactions } from "../shared/schema";
 import { sendVerificationEmail, sendPasswordResetEmail, sendWelcomeEmail } from "./email";
 import { sendPushNotification, sendBroadcastNotification, sendComicCompleteNotification, sendReferralSuccessNotification } from "./notifications";
@@ -5753,6 +5754,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       metadata: { jobId, title, language, charactersCount: characters?.length || 0 },
     });
 
+    scheduleComicWorker();
     res.json({ jobId, creditsDeducted: totalCost, newBalance: updatedUser?.credits || 0 });
   });
 
@@ -5772,6 +5774,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log(`[job] ${jobId} not found`);
       }
       return res.status(404).json({ error: "Job not found" });
+    }
+
+    if (job.status === "pending" || job.status === "processing") {
+      scheduleComicWorker();
     }
 
     if (job.status === "completed" || job.status === "failed") {

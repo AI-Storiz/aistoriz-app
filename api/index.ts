@@ -21,7 +21,7 @@ function waitForExpressResponse(req: IncomingMessage, res: ServerResponse): Prom
   });
 }
 
-/** Vercel serverless entry. Does not listen; generation runs in `server/worker.ts`. */
+/** Vercel serverless entry. Does not listen. Generation is claimed via `scheduleComicWorker()`. */
 export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
   await bootApp();
   await waitForExpressResponse(req, res);
