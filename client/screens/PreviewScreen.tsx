@@ -47,6 +47,8 @@ interface ExtendedComicPage {
     description: string;
     dialogue: string;
   };
+  narration?: string;
+  dialogues?: Array<{ character: string; text: string }>;
   generationMode?: 'multi-model' | 'gemini-fullpage';
 }
 
@@ -60,7 +62,7 @@ export default function PreviewScreen() {
   const { theme } = useTheme();
   const { user, token } = useAuth();
 
-  const { pages: initialPages = [], isReadOnly = false, alreadySaved = false, title = "My Comic" } = route.params;
+  const { pages: initialPages = [], isReadOnly = false, alreadySaved = false, title = "My Comic", generationError } = route.params;
   
   const [pages, setPages] = useState<ExtendedComicPage[]>(initialPages as ExtendedComicPage[]);
   const [saving, setSaving] = useState(false);
@@ -356,13 +358,26 @@ export default function PreviewScreen() {
   const PAGE_HEIGHT = (PAGE_WIDTH * 4) / 3 * 1.35;
 
   const listHeader = useMemo(() => {
-    if (!isReadOnly || !title) return null;
+    const showTitle = Boolean(title) && (isReadOnly || Boolean(generationError));
+    if (!showTitle && !generationError) return null;
     return (
-      <View style={[styles.titleCard, { backgroundColor: theme.backgroundSecondary }]}>
-        <ThemedText style={[styles.titleText, { color: theme.text }]}>{title}</ThemedText>
+      <View>
+        {generationError ? (
+          <View style={[styles.failureBanner, { backgroundColor: theme.backgroundSecondary, borderColor: theme.error }]}>
+            <ThemedText style={[styles.failureTitle, { color: theme.error }]}>Image generation failed</ThemedText>
+            <ThemedText type="small" style={{ color: theme.textSecondary, marginTop: Spacing.xs }}>
+              {generationError}
+            </ThemedText>
+          </View>
+        ) : null}
+        {showTitle ? (
+          <View style={[styles.titleCard, { backgroundColor: theme.backgroundSecondary }]}>
+            <ThemedText style={[styles.titleText, { color: theme.text }]}>{title}</ThemedText>
+          </View>
+        ) : null}
       </View>
     );
-  }, [isReadOnly, title, theme.backgroundSecondary, theme.text]);
+  }, [generationError, isReadOnly, title, theme.backgroundSecondary, theme.error, theme.text, theme.textSecondary]);
 
   const listEmpty = useMemo(
     () => (
@@ -404,6 +419,7 @@ export default function PreviewScreen() {
                 <Feather name="edit-2" size={16} color={theme.textSecondary} />
               </Pressable>
             ) : null}
+            {page.imageUrl?.trim() || page.panelImages?.some((img) => img?.trim()) ? (
             <Pressable
               onPress={() => handleSharePage(typedPages[index])}
               hitSlop={12}
@@ -419,6 +435,7 @@ export default function PreviewScreen() {
             >
               <Feather name="share" size={20} color={theme.primary} />
             </Pressable>
+            ) : null}
           </View>
         </View>
         {page.generationMode === "gemini-fullpage" && page.imageUrl ? (
@@ -459,6 +476,33 @@ export default function PreviewScreen() {
             borderColor={theme.border}
             backgroundColor={theme.backgroundSecondary}
           />
+        ) : page.narration?.trim() || page.dialogues?.some((line) => line.text.trim()) || page.scenes?.description?.trim() || page.scenes?.dialogue?.trim() || generationError ? (
+          <View style={[styles.storyFallback, { backgroundColor: theme.backgroundSecondary }]}>
+            {(page.narration || page.scenes?.description || "").trim() ? (
+              <ThemedText style={[styles.narrationText, { color: theme.text }]}>
+                {page.narration || page.scenes?.description}
+              </ThemedText>
+            ) : null}
+            {(page.dialogues && page.dialogues.length > 0
+              ? page.dialogues
+              : page.scenes?.dialogue
+                ? [{ character: "", text: page.scenes.dialogue }]
+                : []
+            ).filter((line) => line.text.trim()).map((line, lineIndex) => (
+              <ThemedText
+                key={`${page.pageNumber}-line-${lineIndex}`}
+                style={[styles.dialogueText, { color: theme.text }]}
+              >
+                {line.character ? `${line.character}: ${line.text}` : line.text}
+              </ThemedText>
+            ))}
+            {!(page.narration || page.scenes?.description || "").trim() &&
+            !(page.dialogues?.some((line) => line.text.trim()) || page.scenes?.dialogue?.trim()) ? (
+              <ThemedText type="small" style={{ color: theme.textSecondary }}>
+                No narration or dialogue on this page.
+              </ThemedText>
+            ) : null}
+          </View>
         ) : (
           <View
             style={[styles.placeholderPage, { backgroundColor: theme.backgroundSecondary }]}
@@ -480,7 +524,9 @@ export default function PreviewScreen() {
       theme.placeholder,
       theme.primary,
       theme.textSecondary,
+      theme.text,
       title,
+      generationError,
       typedPages,
       handleEditPage,
       handleSharePage,
@@ -513,7 +559,9 @@ export default function PreviewScreen() {
         >
           <Feather name="arrow-left" size={24} color={theme.text} />
           {isReadOnly && (
-            <ThemedText style={styles.customHeaderText}>Back to History</ThemedText>
+            <ThemedText style={styles.customHeaderText}>
+              {generationError ? "Back" : "Back to History"}
+            </ThemedText>
           )}
         </TouchableOpacity>
 
@@ -523,14 +571,18 @@ export default function PreviewScreen() {
           </ThemedText>
         )}
 
-        <TouchableOpacity
-          onPress={handleOpenShareModal}
-          style={styles.customHeaderRight}
-          activeOpacity={0.7}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Feather name="download" size={24} color={theme.primary} />
-        </TouchableOpacity>
+        {pages.some((page) => page.imageUrl?.trim() || page.panelImages?.some((img) => img?.trim())) ? (
+          <TouchableOpacity
+            onPress={handleOpenShareModal}
+            style={styles.customHeaderRight}
+            activeOpacity={0.7}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Feather name="download" size={24} color={theme.primary} />
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.customHeaderRight} />
+        )}
       </View>
 
       <FlatList
@@ -831,6 +883,31 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: "700",
     textAlign: "center",
+  },
+  failureBanner: {
+    marginBottom: Spacing.md,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    borderRadius: BorderRadius.md,
+    borderWidth: 1,
+  },
+  failureTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  storyFallback: {
+    padding: Spacing.lg,
+    borderRadius: BorderRadius.md,
+    gap: Spacing.md,
+  },
+  narrationText: {
+    fontSize: 16,
+    lineHeight: 24,
+    fontStyle: "italic",
+  },
+  dialogueText: {
+    fontSize: 16,
+    lineHeight: 24,
   },
   modalOverlay: {
     flex: 1,

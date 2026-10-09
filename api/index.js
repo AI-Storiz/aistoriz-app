@@ -2723,6 +2723,102 @@ var init_comicJobStall = __esm({
   }
 });
 
+// server/comicCompletion.ts
+function pageHasDisplayImage(page) {
+  if (!page || typeof page !== "object")
+    return false;
+  const row = page;
+  if (typeof row.imageUrl === "string" && row.imageUrl.trim())
+    return true;
+  return Array.isArray(row.panelImages) && row.panelImages.some((image) => typeof image === "string" && image.trim().length > 0);
+}
+function comicPagesAreComplete(pages, requiredCount) {
+  if (!Array.isArray(pages) || requiredCount < 1 || pages.length < requiredCount)
+    return false;
+  for (let pageNumber = 1; pageNumber <= requiredCount; pageNumber += 1) {
+    const page = pages.find((candidate) => {
+      if (!candidate || typeof candidate !== "object")
+        return false;
+      return candidate.pageNumber === pageNumber;
+    });
+    if (!pageHasDisplayImage(page))
+      return false;
+  }
+  return true;
+}
+function httpStatusFromError(error) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const match = message.match(/\b(?:HTTP\s*)?\(?\b(429|5\d\d)\b\)?/i);
+  if (!match)
+    return null;
+  const status = Number(match[1]);
+  return Number.isFinite(status) ? status : null;
+}
+function isTransientGenerationError(error) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (/timeout|timed out|ETIMEDOUT|ECONNRESET|ECONNABORTED|UND_ERR|socket hang up/i.test(message)) {
+    return true;
+  }
+  const status = httpStatusFromError(error);
+  return status === 429 || status != null && status >= 500 && status <= 504;
+}
+function noteTransientAttempt(attempts, key) {
+  const next = { ...attempts ?? {} };
+  const count = (next[key] ?? 0) + 1;
+  next[key] = count;
+  return { attempts: next, count, retry: count < TRANSIENT_ATTEMPT_CAP };
+}
+function transientFailureMessage(step, error, attempts) {
+  const status = httpStatusFromError(error);
+  const statusText = status ? ` (HTTP ${status})` : "";
+  return `Gemini could not finish ${step} after ${attempts} attempts${statusText}. Please try again later.`;
+}
+function storyText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+function storyTextForViewer(payload) {
+  if (!payload || typeof payload !== "object")
+    return null;
+  const story = payload._checkpoint?.story;
+  if (!story || typeof story !== "object")
+    return null;
+  const raw = story;
+  const pagesIn = Array.isArray(raw.pages) ? raw.pages : [];
+  const pages = [];
+  for (const page of pagesIn) {
+    if (!page || typeof page !== "object")
+      continue;
+    const row = page;
+    const dialogues = Array.isArray(row.dialogues) ? row.dialogues.flatMap((item) => {
+      if (!item || typeof item !== "object")
+        return [];
+      const dialogue = item;
+      const character = storyText(dialogue.character);
+      const text2 = storyText(dialogue.text);
+      if (!character && !text2)
+        return [];
+      return [{ character, text: text2 }];
+    }) : [];
+    pages.push({
+      pageNumber: typeof row.pageNumber === "number" && row.pageNumber > 0 ? row.pageNumber : pages.length + 1,
+      ...typeof row.pageType === "string" && row.pageType ? { pageType: row.pageType } : {},
+      narration: storyText(row.narration),
+      dialogues
+    });
+  }
+  const title = storyText(raw.title);
+  if (!title && pages.length === 0)
+    return null;
+  return { ...title ? { title } : {}, pages };
+}
+var TRANSIENT_ATTEMPT_CAP;
+var init_comicCompletion = __esm({
+  "server/comicCompletion.ts"() {
+    "use strict";
+    TRANSIENT_ATTEMPT_CAP = 3;
+  }
+});
+
 // server/openaiCredential.ts
 function isUsableOpenAIKey(apiKey) {
   return !!apiKey && !apiKey.includes("DUMMY") && apiKey.length > 10 && apiKey.startsWith("sk-");
@@ -3392,6 +3488,21 @@ function readCheckpoint(payload) {
   if (!raw || raw.v !== 1)
     return { v: 1 };
   return raw;
+}
+async function pauseTransientGeminiImage(job, budget, step, error) {
+  if (!isTransientGenerationError(error)) {
+    throw error;
+  }
+  const decision = noteTransientAttempt(budget.checkpoint.transientAttempts, step);
+  budget.checkpoint.transientAttempts = decision.attempts;
+  job.requestPayload = budget.payload();
+  if (decision.retry) {
+    job.status = "pending";
+    job.error = void 0;
+    await saveJobToDb(job);
+    return true;
+  }
+  throw new Error(transientFailureMessage(step, error, decision.count));
 }
 function userFacingJobPersistError(err) {
   if (err instanceof ComicS3Error) {
@@ -4729,42 +4840,40 @@ CHARACTER DUPLICATION RULES (CRITICAL \u2014 NO CLONING):
         }
       };
       let pageImageUrl = "";
-      const maxRetries = budget.bounded() ? 1 : 3;
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-          console.log(`Page ${i + 1} attempt ${attempt}/${maxRetries} with Gemini ${modelId}...`);
-          const response = await postGemini("full-page", modelId, geminiApiKey, body);
-          if (!response.ok) {
-            throw new Error(`Gemini error (${response.status}): ${JSON.stringify(response.json).slice(0, 200)}`);
-          }
-          const data = response.json;
-          const candidates = data.candidates;
-          if (!candidates || candidates.length === 0)
-            throw new Error("No image candidates");
-          const candidateParts = candidates[0]?.content?.parts;
-          if (!candidateParts)
-            throw new Error("No content parts");
-          for (const part of candidateParts) {
-            const inlineData = part.inlineData || part.inline_data;
-            if (inlineData) {
-              const mime = inlineData.mimeType || inlineData.mime_type || "image/png";
-              pageImageUrl = `data:${mime};base64,${inlineData.data}`;
-              break;
-            }
-          }
-          if (pageImageUrl) {
-            console.log(`Page ${i + 1} generated successfully`);
+      let lastImageError = null;
+      try {
+        console.log(`Page ${i + 1} image attempt with Gemini ${modelId}...`);
+        const response = await postGemini("full-page", modelId, geminiApiKey, body);
+        if (!response.ok) {
+          throw new Error(`Gemini error (${response.status}): ${JSON.stringify(response.json).slice(0, 200)}`);
+        }
+        const data = response.json;
+        const candidates = data.candidates;
+        if (!candidates || candidates.length === 0)
+          throw new Error("No image candidates");
+        const candidateParts = candidates[0]?.content?.parts;
+        if (!candidateParts)
+          throw new Error("No content parts");
+        for (const part of candidateParts) {
+          const inlineData = part.inlineData || part.inline_data;
+          if (inlineData) {
+            const mime = inlineData.mimeType || inlineData.mime_type || "image/png";
+            pageImageUrl = `data:${mime};base64,${inlineData.data}`;
             break;
           }
-          throw new Error("Response did not contain image data");
-        } catch (err) {
-          console.error(`Page ${i + 1} attempt ${attempt} failed: ${err.message}`);
-          if (attempt === maxRetries) {
-            console.error(`All retries exhausted for page ${i + 1}`);
-          } else {
-            await new Promise((r) => setTimeout(r, 3e3));
-          }
         }
+        if (!pageImageUrl)
+          throw new Error("Response did not contain image data");
+        console.log(`Page ${i + 1} generated successfully`);
+      } catch (err) {
+        lastImageError = err;
+        console.error(`Page ${i + 1} image attempt failed: ${err.message}`);
+      }
+      if (!pageImageUrl) {
+        const failure = lastImageError ?? new Error("Gemini image generation returned no image");
+        if (await pauseTransientGeminiImage(job, budget, `page ${i + 1}`, failure))
+          return;
+        throw failure;
       }
       if (isCover && pageImageUrl && job.title) {
         console.log(`Page ${i + 1} PASS 2: Adding title "${job.title}" to cover...`);
@@ -4948,6 +5057,9 @@ PANEL BORDER RESPECT (CRITICAL \u2014 ZERO TOLERANCE):
         return;
     }
     console.log(`Job ${jobId} completed with ${job.pages.length} full pages via Gemini`);
+    if (!comicPagesAreComplete(job.pages, totalPages)) {
+      throw new Error("Comic generation did not produce every page. Please try again.");
+    }
     if (job.userId && !job.savedToLibrary) {
       try {
         await syncJobPagesToS3Library(job, { publish: true });
@@ -7775,15 +7887,17 @@ async function registerRoutes(app2) {
       scheduleComicWorker();
     }
     if (job.status === "completed" || job.status === "failed") {
+      const pages = stripNonAssetImagesFromComicPagesJson(job.pages);
       res.json({
         id: job.id,
         status: job.status,
         progress: job.progress,
         title: job.title,
-        pages: stripNonAssetImagesFromComicPagesJson(job.pages),
+        pages,
         error: job.error,
         savedToLibrary: job.savedToLibrary || false,
-        libraryComicId: job.libraryComicId
+        libraryComicId: job.libraryComicId,
+        ...job.status === "failed" ? { story: storyTextForViewer(job.requestPayload) } : {}
       });
     } else {
       res.json({
@@ -8235,6 +8349,7 @@ var init_routes = __esm({
     init_email();
     init_notifications();
     init_comicJobStall();
+    init_comicCompletion();
     init_openaiCredential();
     init_geminiCredential();
     MAX_STORY_PROMPT_LENGTH = 4e3;

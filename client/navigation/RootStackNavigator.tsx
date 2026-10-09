@@ -38,10 +38,21 @@ export type RootStackParamList = {
   };
   Preview: {
     projectId?: number;
-    pages?: Array<{ pageNumber: number; imageUrl: string; panelImages?: string[]; scenes?: any; panels?: any[]; pageType?: string }>;
+    pages?: Array<{
+      pageNumber: number;
+      imageUrl: string;
+      panelImages?: string[];
+      scenes?: any;
+      panels?: any[];
+      pageType?: string;
+      narration?: string;
+      dialogues?: Array<{ character: string; text: string }>;
+      generationMode?: string;
+    }>;
     isReadOnly?: boolean;
     alreadySaved?: boolean;
     title?: string;
+    generationError?: string;
   };
   EarnCredits: undefined;
   Subscription: undefined;

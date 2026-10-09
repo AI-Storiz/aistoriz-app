@@ -29,6 +29,7 @@ import { ComicBackground } from "@/components/ComicBackground";
 import { getApiUrl } from "@/lib/query-client";
 import { triggerHistoryRefresh } from "@/store";
 import { fetchComicPagesForPreview } from "@/lib/comicPreviewUrls";
+import { previewPagesAfterImageFailure, type FailedJobStory } from "@/lib/storyFallback";
 import type { RootStackParamList } from "@/navigation/RootStackNavigator";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
@@ -299,6 +300,21 @@ const devLog: (...args: unknown[]) => void = __DEV__
   : () => {};
 
 /** Prefer server copy; strip noisy technical errors in production. */
+function failedStoryPreview(
+  job: { story?: FailedJobStory | null; pages?: any[]; title?: string; error?: string },
+  fallbackTitle?: string,
+) {
+  const pages = previewPagesAfterImageFailure(job.story, job.pages);
+  if (!pages) return null;
+  return {
+    pages,
+    isReadOnly: true as const,
+    alreadySaved: true,
+    title: job.story?.title || job.title || fallbackTitle || "My Comic",
+    generationError: friendlyJobFailureMessage(job.error),
+  };
+}
+
 function friendlyJobFailureMessage(raw: string | undefined | null): string {
   const t = (raw || "").trim();
   if (!t) return "We couldn't finish your comic. Please try again.";
@@ -667,6 +683,14 @@ export default function GeneratingScreen() {
 
         await AsyncStorage.removeItem("current_job_id");
 
+        const storyPreview = failedStoryPreview(job, route.params.title);
+        if (storyPreview) {
+          hasNavigatedRef.current = true;
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+          navigation.replace("Preview", storyPreview);
+          return;
+        }
+
         setError(friendlyJobFailureMessage(job.error));
         setIsGenerating(false);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -726,6 +750,13 @@ export default function GeneratingScreen() {
               retryCountRef.current = 0;
               startPolling(savedJobId);
               return;
+            } else if (job.status === "failed") {
+              const storyPreview = failedStoryPreview(job, route.params.title);
+              if (storyPreview) {
+                hasNavigatedRef.current = true;
+                navigation.replace("Preview", storyPreview);
+                return;
+              }
             }
           }
         }

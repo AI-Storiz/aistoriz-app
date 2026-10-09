@@ -28,6 +28,13 @@ import { aiSettings as aiSettingsTable, comicJobs, creditTransactions } from "..
 import { sendVerificationEmail, sendPasswordResetEmail, sendWelcomeEmail } from "./email";
 import { sendPushNotification, sendBroadcastNotification, sendComicCompleteNotification, sendReferralSuccessNotification } from "./notifications";
 import { requeuePayloadAfterStall } from "./comicJobStall";
+import {
+  comicPagesAreComplete,
+  isTransientGenerationError,
+  noteTransientAttempt,
+  storyTextForViewer,
+  transientFailureMessage,
+} from "./comicCompletion";
 import { isUsableOpenAIKey, OPENAI_API_BASE_URL, selectOpenAIApiKey } from "./openaiCredential";
 import {
   GEMINI_IMAGE_MODEL,
@@ -809,6 +816,8 @@ type ComicCheckpoint = {
     panels: { imageUrl: string; desc: string; dialogue: string; cameraAngle: string }[];
   };
   stalls?: number;
+  /** Transient Gemini failures for a step, kept across Vercel invocations. */
+  transientAttempts?: Record<string, number>;
 };
 
 function readCheckpoint(payload: unknown): ComicCheckpoint {
@@ -863,6 +872,27 @@ class JobStepBudget {
 }
 
 export { requeuePayloadAfterStall };
+
+async function pauseTransientGeminiImage(
+  job: ComicJob,
+  budget: JobStepBudget,
+  step: string,
+  error: unknown,
+): Promise<boolean> {
+  if (!isTransientGenerationError(error)) {
+    throw error;
+  }
+  const decision = noteTransientAttempt(budget.checkpoint.transientAttempts, step);
+  budget.checkpoint.transientAttempts = decision.attempts;
+  job.requestPayload = budget.payload();
+  if (decision.retry) {
+    job.status = "pending";
+    job.error = undefined;
+    await saveJobToDb(job);
+    return true;
+  }
+  throw new Error(transientFailureMessage(step, error, decision.count));
+}
 
 interface ComicPanel {
   description: string;
@@ -2495,45 +2525,42 @@ CHARACTER DUPLICATION RULES (CRITICAL — NO CLONING):
       };
 
       let pageImageUrl = '';
-      const maxRetries = budget.bounded() ? 1 : 3;
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-          console.log(`Page ${i + 1} attempt ${attempt}/${maxRetries} with Gemini ${modelId}...`);
-          const response = await postGemini("full-page", modelId, geminiApiKey, body);
+      let lastImageError: unknown = null;
+      try {
+        console.log(`Page ${i + 1} image attempt with Gemini ${modelId}...`);
+        const response = await postGemini("full-page", modelId, geminiApiKey, body);
 
-          if (!response.ok) {
-            throw new Error(`Gemini error (${response.status}): ${JSON.stringify(response.json).slice(0, 200)}`);
-          }
+        if (!response.ok) {
+          throw new Error(`Gemini error (${response.status}): ${JSON.stringify(response.json).slice(0, 200)}`);
+        }
 
-          const data = response.json;
-          const candidates = data.candidates;
-          if (!candidates || candidates.length === 0) throw new Error('No image candidates');
+        const data = response.json;
+        const candidates = data.candidates;
+        if (!candidates || candidates.length === 0) throw new Error('No image candidates');
 
-          const candidateParts = candidates[0]?.content?.parts;
-          if (!candidateParts) throw new Error('No content parts');
+        const candidateParts = candidates[0]?.content?.parts;
+        if (!candidateParts) throw new Error('No content parts');
 
-          for (const part of candidateParts) {
-            const inlineData = part.inlineData || part.inline_data;
-            if (inlineData) {
-              const mime = inlineData.mimeType || inlineData.mime_type || 'image/png';
-              pageImageUrl = `data:${mime};base64,${inlineData.data}`;
-              break;
-            }
-          }
-
-          if (pageImageUrl) {
-            console.log(`Page ${i + 1} generated successfully`);
+        for (const part of candidateParts) {
+          const inlineData = part.inlineData || part.inline_data;
+          if (inlineData) {
+            const mime = inlineData.mimeType || inlineData.mime_type || 'image/png';
+            pageImageUrl = `data:${mime};base64,${inlineData.data}`;
             break;
           }
-          throw new Error('Response did not contain image data');
-        } catch (err: any) {
-          console.error(`Page ${i + 1} attempt ${attempt} failed: ${err.message}`);
-          if (attempt === maxRetries) {
-            console.error(`All retries exhausted for page ${i + 1}`);
-          } else {
-            await new Promise(r => setTimeout(r, 3000));
-          }
         }
+
+        if (!pageImageUrl) throw new Error('Response did not contain image data');
+        console.log(`Page ${i + 1} generated successfully`);
+      } catch (err: any) {
+        lastImageError = err;
+        console.error(`Page ${i + 1} image attempt failed: ${err.message}`);
+      }
+
+      if (!pageImageUrl) {
+        const failure = lastImageError ?? new Error("Gemini image generation returned no image");
+        if (await pauseTransientGeminiImage(job, budget, `page ${i + 1}`, failure)) return;
+        throw failure;
       }
 
       // === PASS 2 (COVER): Add title text to cover page ===
@@ -2729,6 +2756,10 @@ PANEL BORDER RESPECT (CRITICAL — ZERO TOLERANCE):
     }
 
     console.log(`Job ${jobId} completed with ${job.pages.length} full pages via Gemini`);
+
+    if (!comicPagesAreComplete(job.pages, totalPages)) {
+      throw new Error("Comic generation did not produce every page. Please try again.");
+    }
 
     if (job.userId && !job.savedToLibrary) {
       try {
@@ -6133,15 +6164,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
 
     if (job.status === "completed" || job.status === "failed") {
+      const pages = stripNonAssetImagesFromComicPagesJson(job.pages) as ComicPage[];
       res.json({
         id: job.id,
         status: job.status,
         progress: job.progress,
         title: job.title,
-        pages: stripNonAssetImagesFromComicPagesJson(job.pages) as ComicPage[],
+        pages,
         error: job.error,
         savedToLibrary: job.savedToLibrary || false,
         libraryComicId: job.libraryComicId,
+        ...(job.status === "failed" ? { story: storyTextForViewer(job.requestPayload) } : {}),
       });
     } else {
       res.json({
