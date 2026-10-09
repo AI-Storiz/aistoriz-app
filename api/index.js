@@ -1539,7 +1539,7 @@ var init_storage = __esm({
       }
       // Rate Limit Settings
       async getRateLimitSettings() {
-        const [settings] = await db.select().from(rateLimitSettings).limit(1);
+        const [settings] = await db.select().from(rateLimitSettings).orderBy(desc(rateLimitSettings.updatedAt), desc(rateLimitSettings.id)).limit(1);
         if (!settings) {
           const [newSettings] = await db.insert(rateLimitSettings).values({
             maxGenerationsPerHour: 5,
@@ -1554,7 +1554,7 @@ var init_storage = __esm({
         const currentSettings = await this.getRateLimitSettings();
         const [updated] = await db.update(rateLimitSettings).set({
           ...updates,
-          updatedAt: /* @__PURE__ */ new Date()
+          updatedAt: sql2`CURRENT_TIMESTAMP`
         }).where(eq(rateLimitSettings.id, currentSettings.id)).returning();
         return updated;
       }
@@ -1583,7 +1583,10 @@ var init_storage = __esm({
       // Check if user is rate limited
       async checkUserRateLimit(userId) {
         const settings = await this.getRateLimitSettings();
-        if (!settings.enabled) {
+        const enabled = settings.enabled === true;
+        const maxPerHour = Number(settings.maxGenerationsPerHour);
+        const maxPerDay = Number(settings.maxGenerationsPerDay);
+        if (!enabled) {
           return { allowed: true, hourlyCount: 0, dailyCount: 0 };
         }
         const now = /* @__PURE__ */ new Date();
@@ -1605,18 +1608,18 @@ var init_storage = __esm({
           )
         );
         const dailyCount = dailyLogs.length;
-        if (hourlyCount >= settings.maxGenerationsPerHour) {
+        if (Number.isFinite(maxPerHour) && hourlyCount >= maxPerHour) {
           return {
             allowed: false,
-            reason: `Hourly limit reached (${settings.maxGenerationsPerHour}/hour)`,
+            reason: `Hourly limit reached (${maxPerHour}/hour)`,
             hourlyCount,
             dailyCount
           };
         }
-        if (dailyCount >= settings.maxGenerationsPerDay) {
+        if (Number.isFinite(maxPerDay) && dailyCount >= maxPerDay) {
           return {
             allowed: false,
-            reason: `Daily limit reached (${settings.maxGenerationsPerDay}/day)`,
+            reason: `Daily limit reached (${maxPerDay}/day)`,
             hourlyCount,
             dailyCount
           };
@@ -6901,6 +6904,21 @@ async function registerRoutes(app2) {
       res.status(500).json({ error: "Failed to update credit settings" });
     }
   });
+  function readRateLimitInt(value) {
+    if (value === void 0 || value === null || value === "")
+      return void 0;
+    const parsed = typeof value === "number" ? value : parseInt(String(value), 10);
+    if (!Number.isFinite(parsed) || parsed < 0)
+      return void 0;
+    return parsed;
+  }
+  function readRateLimitEnabled(value) {
+    if (value === true || value === "true" || value === 1 || value === "1")
+      return true;
+    if (value === false || value === "false" || value === 0 || value === "0")
+      return false;
+    return void 0;
+  }
   app2.get("/api/admin/rate-limits", requireAdminAuth, async (req, res) => {
     try {
       const settings = await storage.getRateLimitSettings();
@@ -6914,12 +6932,15 @@ async function registerRoutes(app2) {
     try {
       const { maxGenerationsPerHour, maxGenerationsPerDay, enabled } = req.body;
       const updates = {};
-      if (maxGenerationsPerHour !== void 0)
-        updates.maxGenerationsPerHour = maxGenerationsPerHour;
-      if (maxGenerationsPerDay !== void 0)
-        updates.maxGenerationsPerDay = maxGenerationsPerDay;
-      if (enabled !== void 0)
-        updates.enabled = enabled;
+      const hourly = readRateLimitInt(maxGenerationsPerHour);
+      const daily = readRateLimitInt(maxGenerationsPerDay);
+      const enabledFlag = readRateLimitEnabled(enabled);
+      if (hourly !== void 0)
+        updates.maxGenerationsPerHour = hourly;
+      if (daily !== void 0)
+        updates.maxGenerationsPerDay = daily;
+      if (enabledFlag !== void 0)
+        updates.enabled = enabledFlag;
       const settings = await storage.updateRateLimitSettings(updates);
       res.json({ success: true, settings });
     } catch (error) {

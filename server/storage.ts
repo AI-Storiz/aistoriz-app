@@ -687,7 +687,11 @@ export class DatabaseStorage implements IStorage {
 
   // Rate Limit Settings
   async getRateLimitSettings(): Promise<RateLimitSettings> {
-    const [settings] = await db.select().from(rateLimitSettings).limit(1);
+    const [settings] = await db
+      .select()
+      .from(rateLimitSettings)
+      .orderBy(desc(rateLimitSettings.updatedAt), desc(rateLimitSettings.id))
+      .limit(1);
     if (!settings) {
       // Create default settings if none exist
       const [newSettings] = await db
@@ -709,7 +713,7 @@ export class DatabaseStorage implements IStorage {
       .update(rateLimitSettings)
       .set({
         ...updates,
-        updatedAt: new Date(),
+        updatedAt: sql`CURRENT_TIMESTAMP`,
       })
       .where(eq(rateLimitSettings.id, currentSettings.id))
       .returning();
@@ -750,8 +754,11 @@ export class DatabaseStorage implements IStorage {
   // Check if user is rate limited
   async checkUserRateLimit(userId: string): Promise<{ allowed: boolean; reason?: string; hourlyCount: number; dailyCount: number }> {
     const settings = await this.getRateLimitSettings();
-    
-    if (!settings.enabled) {
+    const enabled = settings.enabled === true;
+    const maxPerHour = Number(settings.maxGenerationsPerHour);
+    const maxPerDay = Number(settings.maxGenerationsPerDay);
+
+    if (!enabled) {
       return { allowed: true, hourlyCount: 0, dailyCount: 0 };
     }
 
@@ -785,19 +792,19 @@ export class DatabaseStorage implements IStorage {
       );
     const dailyCount = dailyLogs.length;
 
-    if (hourlyCount >= settings.maxGenerationsPerHour) {
+    if (Number.isFinite(maxPerHour) && hourlyCount >= maxPerHour) {
       return { 
         allowed: false, 
-        reason: `Hourly limit reached (${settings.maxGenerationsPerHour}/hour)`,
+        reason: `Hourly limit reached (${maxPerHour}/hour)`,
         hourlyCount,
         dailyCount
       };
     }
 
-    if (dailyCount >= settings.maxGenerationsPerDay) {
+    if (Number.isFinite(maxPerDay) && dailyCount >= maxPerDay) {
       return { 
         allowed: false, 
-        reason: `Daily limit reached (${settings.maxGenerationsPerDay}/day)`,
+        reason: `Daily limit reached (${maxPerDay}/day)`,
         hourlyCount,
         dailyCount
       };

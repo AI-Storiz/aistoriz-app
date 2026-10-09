@@ -599,7 +599,7 @@
               <h4>Rate Limiting Enabled</h4>
               <div class="toggle-container">
                 <div class="toggle" id="rate-limit-enabled" onclick="toggleRateLimit()"></div>
-                <span id="rate-limit-status-text">Disabled</span>
+                <span id="rate-limit-status-text">Loading</span>
               </div>
               <div class="setting-help">Enable or disable rate limiting</div>
             </div>
@@ -1474,10 +1474,12 @@
         });
         if (res.ok) {
           const data = await res.json();
-          const settings = data.settings;
-          rateLimitEnabled = settings.enabled;
-          document.getElementById('rate-limit-hourly').value = settings.maxGenerationsPerHour || 5;
-          document.getElementById('rate-limit-daily').value = settings.maxGenerationsPerDay || 20;
+          const settings = data.settings || {};
+          rateLimitEnabled = settings.enabled === true;
+          const hourly = settings.maxGenerationsPerHour ?? settings.max_generations_per_hour;
+          const daily = settings.maxGenerationsPerDay ?? settings.max_generations_per_day;
+          document.getElementById('rate-limit-hourly').value = hourly ?? '';
+          document.getElementById('rate-limit-daily').value = daily ?? '';
           updateRateLimitToggle();
         }
       } catch (err) {
@@ -1503,10 +1505,11 @@
     }
     
     async function saveRateLimitSettings() {
+      rateLimitEnabled = document.getElementById('rate-limit-enabled').classList.contains('active');
       const updates = {
         enabled: rateLimitEnabled,
-        maxGenerationsPerHour: parseInt(document.getElementById('rate-limit-hourly').value),
-        maxGenerationsPerDay: parseInt(document.getElementById('rate-limit-daily').value)
+        maxGenerationsPerHour: parseInt(document.getElementById('rate-limit-hourly').value, 10),
+        maxGenerationsPerDay: parseInt(document.getElementById('rate-limit-daily').value, 10)
       };
       
       try {
@@ -1520,6 +1523,14 @@
         });
         
         if (res.ok) {
+          const data = await res.json();
+          const settings = data.settings || {};
+          rateLimitEnabled = settings.enabled === true;
+          const hourly = settings.maxGenerationsPerHour ?? settings.max_generations_per_hour;
+          const daily = settings.maxGenerationsPerDay ?? settings.max_generations_per_day;
+          if (hourly !== undefined && hourly !== null) document.getElementById('rate-limit-hourly').value = hourly;
+          if (daily !== undefined && daily !== null) document.getElementById('rate-limit-daily').value = daily;
+          updateRateLimitToggle();
           showSuccess('Rate limit settings saved successfully!');
         } else {
           showError('Failed to save rate limit settings');

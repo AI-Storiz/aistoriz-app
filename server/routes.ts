@@ -5209,6 +5209,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  function readRateLimitInt(value: unknown): number | undefined {
+    if (value === undefined || value === null || value === "") return undefined;
+    const parsed = typeof value === "number" ? value : parseInt(String(value), 10);
+    if (!Number.isFinite(parsed) || parsed < 0) return undefined;
+    return parsed;
+  }
+
+  function readRateLimitEnabled(value: unknown): boolean | undefined {
+    if (value === true || value === "true" || value === 1 || value === "1") return true;
+    if (value === false || value === "false" || value === 0 || value === "0") return false;
+    return undefined;
+  }
+
   // Admin: Get rate limit settings
   app.get("/api/admin/rate-limits", requireAdminAuth, async (req: Request, res: Response) => {
     try {
@@ -5224,10 +5237,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/admin/rate-limits", requireAdminAuth, async (req: Request, res: Response) => {
     try {
       const { maxGenerationsPerHour, maxGenerationsPerDay, enabled } = req.body;
-      const updates: any = {};
-      if (maxGenerationsPerHour !== undefined) updates.maxGenerationsPerHour = maxGenerationsPerHour;
-      if (maxGenerationsPerDay !== undefined) updates.maxGenerationsPerDay = maxGenerationsPerDay;
-      if (enabled !== undefined) updates.enabled = enabled;
+      const updates: { maxGenerationsPerHour?: number; maxGenerationsPerDay?: number; enabled?: boolean } = {};
+      const hourly = readRateLimitInt(maxGenerationsPerHour);
+      const daily = readRateLimitInt(maxGenerationsPerDay);
+      const enabledFlag = readRateLimitEnabled(enabled);
+      if (hourly !== undefined) updates.maxGenerationsPerHour = hourly;
+      if (daily !== undefined) updates.maxGenerationsPerDay = daily;
+      if (enabledFlag !== undefined) updates.enabled = enabledFlag;
       
       const settings = await storage.updateRateLimitSettings(updates);
       res.json({ success: true, settings });
