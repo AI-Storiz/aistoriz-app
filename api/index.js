@@ -2700,6 +2700,104 @@ var init_notifications = __esm({
   }
 });
 
+// server/comicJobStall.ts
+function requeuePayloadAfterStall(payload) {
+  if (!payload || typeof payload !== "object")
+    return null;
+  const row = payload;
+  if (typeof row.storyPrompt !== "string" || typeof row.style !== "string")
+    return null;
+  const raw = row._checkpoint;
+  const checkpoint = raw && raw.v === 1 ? raw : { v: 1 };
+  const stalls = (checkpoint.stalls ?? 0) + 1;
+  if (stalls > MAX_COMIC_JOB_STALLS)
+    return null;
+  checkpoint.stalls = stalls;
+  return { ...row, _checkpoint: checkpoint };
+}
+var MAX_COMIC_JOB_STALLS;
+var init_comicJobStall = __esm({
+  "server/comicJobStall.ts"() {
+    "use strict";
+    MAX_COMIC_JOB_STALLS = 12;
+  }
+});
+
+// server/openaiCredential.ts
+function isUsableOpenAIKey(apiKey) {
+  return !!apiKey && !apiKey.includes("DUMMY") && apiKey.length > 10 && apiKey.startsWith("sk-");
+}
+function selectOpenAIApiKey(adminKey, envKey) {
+  const trimmedEnv = typeof envKey === "string" ? envKey.trim() : envKey;
+  const apiKey = isUsableOpenAIKey(adminKey) ? adminKey : trimmedEnv;
+  if (!isUsableOpenAIKey(apiKey)) {
+    throw new Error(OPENAI_KEY_MISSING_MESSAGE);
+  }
+  return apiKey;
+}
+var OPENAI_API_BASE_URL, OPENAI_KEY_MISSING_MESSAGE;
+var init_openaiCredential = __esm({
+  "server/openaiCredential.ts"() {
+    "use strict";
+    OPENAI_API_BASE_URL = "https://api.openai.com/v1";
+    OPENAI_KEY_MISSING_MESSAGE = "OpenAI API key not configured. Save an OpenAI key that starts with sk- in Admin Providers, or set OPENAI_API_KEY on the server.";
+  }
+});
+
+// server/geminiCredential.ts
+function normalizeGeminiKey(apiKey) {
+  if (typeof apiKey !== "string")
+    return null;
+  const trimmed = apiKey.trim();
+  if (!trimmed || /\s/.test(trimmed))
+    return null;
+  return trimmed;
+}
+function selectGeminiApiKey(imageKey, storyKey, envKey) {
+  const image = normalizeGeminiKey(imageKey);
+  if (image)
+    return { apiKey: image, source: "admin-image" };
+  const env = normalizeGeminiKey(envKey);
+  if (env)
+    return { apiKey: env, source: "env" };
+  const story = normalizeGeminiKey(storyKey);
+  if (story)
+    return { apiKey: story, source: "admin-story" };
+  throw new Error(GEMINI_KEY_MISSING_MESSAGE);
+}
+function resolveGeminiTextModel(model) {
+  const value = (model || "").trim();
+  if (!value)
+    return GEMINI_TEXT_MODEL;
+  return RETIRED_TEXT_MODELS[value] || value;
+}
+function resolveGeminiImageModel(model) {
+  const value = (model || "").trim();
+  if (!value)
+    return GEMINI_IMAGE_MODEL;
+  return RETIRED_IMAGE_MODELS[value] || value;
+}
+var GEMINI_TEXT_MODEL, GEMINI_IMAGE_MODEL, GEMINI_IMAGE_MODALITIES, GEMINI_KEY_MISSING_MESSAGE, RETIRED_TEXT_MODELS, RETIRED_IMAGE_MODELS;
+var init_geminiCredential = __esm({
+  "server/geminiCredential.ts"() {
+    "use strict";
+    GEMINI_TEXT_MODEL = "gemini-3.5-flash";
+    GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image";
+    GEMINI_IMAGE_MODALITIES = ["TEXT", "IMAGE"];
+    GEMINI_KEY_MISSING_MESSAGE = "Gemini API key not configured. Save a Gemini key in Admin Providers, or set GEMINI_API_KEY on the server.";
+    RETIRED_TEXT_MODELS = {
+      "gemini-2.0-flash": GEMINI_TEXT_MODEL,
+      "gemini-1.5-pro": GEMINI_TEXT_MODEL,
+      "gemini-1.5-flash": GEMINI_TEXT_MODEL,
+      "gemini-2.0-flash-exp": GEMINI_TEXT_MODEL
+    };
+    RETIRED_IMAGE_MODELS = {
+      "gemini-2.5-flash-image": GEMINI_IMAGE_MODEL,
+      "gemini-3-pro-image-preview": "gemini-3-pro-image"
+    };
+  }
+});
+
 // server/routes.ts
 var routes_exports = {};
 __export(routes_exports, {
@@ -3019,16 +3117,16 @@ function buildDefaultSettings() {
     geminiImage: {
       enabled: false,
       apiKey: "",
-      model: "gemini-2.5-flash-image",
+      model: GEMINI_IMAGE_MODEL,
       models: {
         gemini25Flash: {
           enabled: true,
-          modelId: "gemini-2.5-flash-image",
-          cost: "$0.039/image (500 free/day)"
+          modelId: GEMINI_IMAGE_MODEL,
+          cost: "$0.039/image"
         },
         gemini3Pro: {
           enabled: false,
-          modelId: "gemini-3-pro-image-preview",
+          modelId: "gemini-3-pro-image",
           cost: "$0.039/image"
         }
       },
@@ -3041,7 +3139,7 @@ function buildDefaultSettings() {
     storyTextProvider: {
       provider: "openai",
       openaiModel: "gpt-4o",
-      geminiModel: "gemini-2.0-flash",
+      geminiModel: GEMINI_TEXT_MODEL,
       geminiApiKey: "",
       replicateModel: "meta/meta-llama-3-70b-instruct"
     }
@@ -3099,6 +3197,14 @@ function mergeStoredSettings(stored) {
       ...stored.storyTextProvider
     };
   }
+  merged.storyTextProvider.geminiModel = resolveGeminiTextModel(merged.storyTextProvider.geminiModel);
+  merged.geminiImage.model = resolveGeminiImageModel(merged.geminiImage.model);
+  merged.geminiImage.models.gemini25Flash.modelId = resolveGeminiImageModel(
+    merged.geminiImage.models.gemini25Flash.modelId
+  );
+  merged.geminiImage.models.gemini3Pro.modelId = resolveGeminiImageModel(
+    merged.geminiImage.models.gemini3Pro.modelId
+  );
   return merged;
 }
 function readLegacySettingsFile() {
@@ -3142,23 +3248,45 @@ async function saveSettings(settings) {
   });
   aiSettings2 = toSave;
 }
-function isUsableOpenAIKey(apiKey) {
-  return !!apiKey && !apiKey.includes("DUMMY") && apiKey.length > 10 && apiKey.startsWith("sk-");
-}
 function getOpenAIClient() {
-  const adminKey = aiSettings2.openai.apiKey;
-  const envKey = process.env.OPENAI_API_KEY?.trim();
-  const apiKey = isUsableOpenAIKey(adminKey) ? adminKey : envKey;
-  if (!isUsableOpenAIKey(apiKey)) {
-    throw new Error("OpenAI API key not configured. Please set a valid API key in the admin panel.");
-  }
+  const apiKey = selectOpenAIApiKey(aiSettings2.openai.apiKey, process.env.OPENAI_API_KEY);
   return new OpenAI({
     apiKey,
-    baseURL: "https://api.openai.com/v1"
+    baseURL: OPENAI_API_BASE_URL
   });
 }
+function requireGeminiCredential() {
+  return selectGeminiApiKey(
+    aiSettings2.geminiImage.apiKey,
+    aiSettings2.storyTextProvider.geminiApiKey,
+    process.env.GEMINI_API_KEY
+  );
+}
+function logGeminiSelection(purpose, model, selected) {
+  console.log(`[gemini] ${purpose} provider=gemini source=${selected.source} model=${model}`);
+}
+async function postGemini(purpose, model, apiKey, body) {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }
+  );
+  console.log(`[gemini] ${purpose} httpStatus=${response.status}`);
+  const raw = await response.text();
+  const text2 = raw.split(apiKey).join("[redacted]");
+  let json = null;
+  try {
+    json = text2 ? JSON.parse(text2) : null;
+  } catch {
+    json = null;
+  }
+  return { status: response.status, ok: response.ok, json: json ?? { error: text2.slice(0, 500) } };
+}
 async function generateTextWithGemini(systemPrompt, userPrompt, model, apiKey, responseFormat) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const resolvedModel = resolveGeminiTextModel(model);
   const body = {
     contents: [
       { role: "user", parts: [{ text: `${systemPrompt}
@@ -3173,17 +3301,11 @@ ${userPrompt}` }] }
   if (responseFormat?.type === "json_object") {
     body.generationConfig.responseMimeType = "application/json";
   }
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
+  const response = await postGemini("story-text", resolvedModel, apiKey, body);
   if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Gemini API error (${response.status}): ${errText}`);
+    throw new Error(`Gemini API error (${response.status}): ${JSON.stringify(response.json).slice(0, 500)}`);
   }
-  const data = await response.json();
-  const text2 = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  const text2 = response.json?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("");
   if (!text2)
     throw new Error("Gemini returned empty response");
   return text2;
@@ -3240,9 +3362,10 @@ async function generateTextWithProvider(systemPrompt, userPrompt, responseFormat
   const textSettings = aiSettings2.storyTextProvider;
   const provider = textSettings.provider;
   if (provider === "gemini") {
-    if (!textSettings.geminiApiKey)
-      throw new Error("Gemini API key not configured in admin panel");
-    return generateTextWithGemini(systemPrompt, userPrompt, textSettings.geminiModel, textSettings.geminiApiKey, responseFormat);
+    const selected = requireGeminiCredential();
+    const model = resolveGeminiTextModel(textSettings.geminiModel);
+    logGeminiSelection("story-text", model, selected);
+    return generateTextWithGemini(systemPrompt, userPrompt, model, selected.apiKey, responseFormat);
   }
   if (provider === "replicate") {
     const result = await generateTextWithReplicate(systemPrompt, userPrompt, textSettings.replicateModel, aiSettings2.replicate.apiKey);
@@ -3269,19 +3392,6 @@ function readCheckpoint(payload) {
   if (!raw || raw.v !== 1)
     return { v: 1 };
   return raw;
-}
-function requeuePayloadAfterStall(payload) {
-  if (!payload || typeof payload !== "object")
-    return null;
-  const row = payload;
-  if (typeof row.storyPrompt !== "string" || typeof row.style !== "string")
-    return null;
-  const checkpoint = readCheckpoint(payload);
-  const stalls = (checkpoint.stalls ?? 0) + 1;
-  if (stalls > MAX_COMIC_JOB_STALLS)
-    return null;
-  checkpoint.stalls = stalls;
-  return { ...row, _checkpoint: checkpoint };
 }
 function userFacingJobPersistError(err) {
   if (err instanceof ComicS3Error) {
@@ -3837,9 +3947,10 @@ Example output: "wearing a red plaid flannel shirt, dark blue jeans, brown leath
     console.log(`Detecting outfit for "${characterName}" from uploaded photo...`);
     const textSettings = aiSettings2.storyTextProvider;
     let outfit = "";
-    if (textSettings.provider === "gemini" && textSettings.geminiApiKey) {
-      const model = textSettings.geminiModel || "gemini-2.0-flash";
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${textSettings.geminiApiKey}`;
+    if (textSettings.provider === "gemini") {
+      const selected = requireGeminiCredential();
+      const model = resolveGeminiTextModel(textSettings.geminiModel);
+      logGeminiSelection("outfit-detection", model, selected);
       const body = {
         contents: [{
           role: "user",
@@ -3861,17 +3972,11 @@ ${userText}` },
         body.contents[0].parts[1] = { inlineData: void 0, fileData: { mimeType: "image/jpeg", fileUri: imageUrl } };
       }
       body.contents[0].parts = body.contents[0].parts.filter((p) => p.text || p.inlineData || p.fileData);
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
+      const response = await postGemini("outfit-detection", model, selected.apiKey, body);
       if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Gemini Vision error (${response.status}): ${errText}`);
+        throw new Error(`Gemini Vision error (${response.status}): ${JSON.stringify(response.json).slice(0, 500)}`);
       }
-      const data = await response.json();
-      outfit = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+      outfit = response.json?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
     } else {
       const openai = getOpenAIClient();
       const response = await openai.chat.completions.create({
@@ -3954,14 +4059,12 @@ async function generateImageWithOpenAI(prompt, aspectRatio = "1:1") {
 }
 async function generateImageWithGemini(prompt, referenceImageUrls, aspectRatio = "1:1") {
   const geminiSettings = aiSettings2.geminiImage;
-  const apiKey = geminiSettings.apiKey || aiSettings2.storyTextProvider.geminiApiKey;
-  if (!apiKey) {
-    throw new Error("Gemini API key not configured. Set it in the Gemini Image section or Story Text Provider section of the admin panel.");
-  }
+  const selected = requireGeminiCredential();
+  const apiKey = selected.apiKey;
   const selectedModelKey = geminiSettings.defaultModel || "gemini25Flash";
   const modelConfig = geminiSettings.models[selectedModelKey];
-  const modelId = modelConfig?.modelId || geminiSettings.model || "gemini-2.5-flash-image";
-  console.log(`Generating image with Gemini model: ${modelId}`);
+  const modelId = resolveGeminiImageModel(modelConfig?.modelId || geminiSettings.model);
+  logGeminiSelection("image", modelId, selected);
   const parts = [];
   if (referenceImageUrls && referenceImageUrls.length > 0) {
     for (let i = 0; i < referenceImageUrls.length; i++) {
@@ -4002,24 +4105,19 @@ async function generateImageWithGemini(prompt, referenceImageUrls, aspectRatio =
     }
   }
   parts.push({ text: prompt });
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
   const body = {
     contents: [{ role: "user", parts }],
     generationConfig: {
-      responseModalities: ["Image"],
-      temperature: 1
+      responseModalities: [...GEMINI_IMAGE_MODALITIES],
+      temperature: 1,
+      imageConfig: { aspectRatio }
     }
   };
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
+  const response = await postGemini("image", modelId, apiKey, body);
   if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Gemini image generation error (${response.status}): ${errText}`);
+    throw new Error(`Gemini image generation error (${response.status}): ${JSON.stringify(response.json).slice(0, 500)}`);
   }
-  const data = await response.json();
+  const data = response.json;
   const candidates = data.candidates;
   if (!candidates || candidates.length === 0) {
     throw new Error("Gemini returned no image candidates");
@@ -4040,8 +4138,19 @@ async function generateImageWithGemini(prompt, referenceImageUrls, aspectRatio =
   console.error("Gemini response parts:", JSON.stringify(candidateParts.map((p) => Object.keys(p))));
   throw new Error("Gemini response did not contain image data");
 }
+function hasGeminiCredential() {
+  try {
+    requireGeminiCredential();
+    return true;
+  } catch {
+    return false;
+  }
+}
 function getActiveProvider() {
   const defaultProvider = aiSettings2.defaultProvider;
+  if ((defaultProvider === "gemini" || defaultProvider === "geminiImage") && aiSettings2.geminiImage.enabled && hasGeminiCredential()) {
+    return "gemini";
+  }
   const providerConfig = aiSettings2[defaultProvider];
   if (providerConfig && typeof providerConfig === "object" && "enabled" in providerConfig && providerConfig.enabled) {
     if (defaultProvider === "openai") {
@@ -4064,6 +4173,9 @@ function getActiveProvider() {
   if (aiSettings2.openai.enabled && aiSettings2.openai.apiKey && !aiSettings2.openai.apiKey.includes("DUMMY") && aiSettings2.openai.apiKey.length > 10 && aiSettings2.openai.apiKey.startsWith("sk-")) {
     return "openai";
   }
+  if (aiSettings2.geminiImage.enabled && hasGeminiCredential()) {
+    return "gemini";
+  }
   throw new Error("No AI providers configured. Please set up API keys in the admin panel.");
 }
 async function generateImage(prompt, referenceImageUrls, aspectRatio) {
@@ -4073,8 +4185,7 @@ async function generateImage(prompt, referenceImageUrls, aspectRatio) {
   try {
     if (referenceImageUrls && referenceImageUrls.length > 0) {
       if (panelProvider === "gemini") {
-        const geminiKey = aiSettings2.geminiImage.apiKey || aiSettings2.storyTextProvider.geminiApiKey;
-        if (geminiKey && aiSettings2.geminiImage.enabled) {
+        if (aiSettings2.geminiImage.enabled && hasGeminiCredential()) {
           console.log(`Using Gemini with ${referenceImageUrls.length} reference image(s) for character consistency`);
           return await generateImageWithGemini(prompt, referenceImageUrls, aspectRatio || "1:1");
         } else {
@@ -4100,17 +4211,16 @@ async function generateImage(prompt, referenceImageUrls, aspectRatio) {
         return await generateImageWithKontext(prompt, referenceImageUrls[0], aspectRatio || "1:1");
       }
     }
-    if (panelProvider === "gemini" && aiSettings2.geminiImage.enabled) {
-      const geminiKey = aiSettings2.geminiImage.apiKey || aiSettings2.storyTextProvider.geminiApiKey;
-      if (geminiKey) {
-        return await generateImageWithGemini(prompt, void 0, aspectRatio || "1:1");
-      }
+    if (panelProvider === "gemini" && aiSettings2.geminiImage.enabled && hasGeminiCredential()) {
+      return await generateImageWithGemini(prompt, void 0, aspectRatio || "1:1");
     }
     switch (provider) {
       case "replicate":
         return await generateImageWithReplicate(prompt, aspectRatio || "1:1");
       case "stability":
         return await generateImageWithStability(prompt, aspectRatio || "1:1");
+      case "gemini":
+        return await generateImageWithGemini(prompt, referenceImageUrls, aspectRatio || "1:1");
       case "openai":
       default:
         return await generateImageWithOpenAI(prompt, aspectRatio || "1:1");
@@ -4152,17 +4262,14 @@ function getEnabledProviders() {
   if (aiSettings2.stability.enabled && aiSettings2.stability.apiKey) {
     enabled.push("stability");
   }
-  if (aiSettings2.geminiImage.enabled && (aiSettings2.geminiImage.apiKey || aiSettings2.storyTextProvider.geminiApiKey)) {
+  if (aiSettings2.geminiImage.enabled && hasGeminiCredential()) {
     enabled.push("gemini");
   }
   return enabled;
 }
 async function generateImageWithProvider(provider, prompt, referenceImageUrls, aspectRatio) {
   if (provider === "gemini") {
-    const geminiKey = aiSettings2.geminiImage.apiKey || aiSettings2.storyTextProvider.geminiApiKey;
-    if (!geminiKey || geminiKey.length < 4) {
-      throw new Error("Gemini API key not configured");
-    }
+    requireGeminiCredential();
   } else {
     const providerConfig = aiSettings2[provider];
     if (!providerConfig || typeof providerConfig !== "object" || !providerConfig.apiKey || providerConfig.apiKey.length < 4) {
@@ -4381,13 +4488,12 @@ Format as JSON:
     }
     if (!story)
       throw new Error("No story content generated");
-    const geminiApiKey = aiSettings2.geminiImage.apiKey || aiSettings2.storyTextProvider.geminiApiKey;
-    if (!geminiApiKey) {
-      throw new Error("Gemini API key not configured. Required for full-page generation mode.");
-    }
+    const selectedGemini = requireGeminiCredential();
+    const geminiApiKey = selectedGemini.apiKey;
     const selectedModelKey = aiSettings2.geminiImage.defaultModel || "gemini25Flash";
     const modelConfig = aiSettings2.geminiImage.models[selectedModelKey];
-    const modelId = modelConfig?.modelId || aiSettings2.geminiImage.model || "gemini-2.5-flash-image";
+    const modelId = resolveGeminiImageModel(modelConfig?.modelId || aiSettings2.geminiImage.model);
+    logGeminiSelection("full-page", modelId, selectedGemini);
     const styleDesc = styleDescriptions[style] || styleDescriptions.Comic;
     const stylizedCharacters = /* @__PURE__ */ new Map();
     for (const saved of checkpoint.stylized || []) {
@@ -4442,7 +4548,6 @@ CRITICAL INSTRUCTIONS:
 - Clean simple background (solid or simple gradient)
 - The result should look like a professional ${style} character sheet portrait of THIS specific person
 - DO NOT add any text, labels, or watermarks`;
-          const transformUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${geminiApiKey}`;
           const transformBody = {
             contents: [{
               role: "user",
@@ -4452,25 +4557,21 @@ CRITICAL INSTRUCTIONS:
               ]
             }],
             generationConfig: {
-              responseModalities: ["Image"],
+              responseModalities: [...GEMINI_IMAGE_MODALITIES],
               temperature: 0.4
             }
           };
           let stylizedBase64 = "";
           let stylizedMime = "image/png";
-          for (let attempt = 1; attempt <= 2; attempt++) {
+          const styleAttempts = budget.bounded() ? 1 : 2;
+          for (let attempt = 1; attempt <= styleAttempts; attempt++) {
             try {
-              console.log(`Transforming "${charData.name}" to ${style} style (attempt ${attempt}/2)...`);
-              const response = await fetch(transformUrl, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(transformBody)
-              });
+              console.log(`Transforming "${charData.name}" to ${style} style (attempt ${attempt}/${styleAttempts})...`);
+              const response = await postGemini("character-style", modelId, geminiApiKey, transformBody);
               if (!response.ok) {
-                const errText = await response.text();
-                throw new Error(`Gemini transform error (${response.status}): ${errText.substring(0, 200)}`);
+                throw new Error(`Gemini transform error (${response.status}): ${JSON.stringify(response.json).slice(0, 200)}`);
               }
-              const data = await response.json();
+              const data = response.json;
               const candidateParts = data.candidates?.[0]?.content?.parts;
               if (!candidateParts)
                 throw new Error("No content parts in transform response");
@@ -4489,7 +4590,7 @@ CRITICAL INSTRUCTIONS:
               throw new Error("No image data in transform response");
             } catch (err) {
               console.error(`Transform attempt ${attempt} for "${charData.name}" failed: ${err.message}`);
-              if (attempt === 2) {
+              if (attempt === styleAttempts) {
                 console.warn(`Using raw photo for "${charData.name}" as fallback`);
                 stylizedBase64 = rawBase64;
                 stylizedMime = rawMime;
@@ -4620,29 +4721,23 @@ CHARACTER DUPLICATION RULES (CRITICAL \u2014 NO CLONING):
 - Check each panel before finalizing: count the characters \u2014 if you see the same face twice, remove the duplicate`;
       }
       const parts = [...characterRefParts, { text: pagePrompt }];
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${geminiApiKey}`;
       const body = {
         contents: [{ role: "user", parts }],
         generationConfig: {
-          responseModalities: ["Image"],
+          responseModalities: [...GEMINI_IMAGE_MODALITIES],
           temperature: 1
         }
       };
       let pageImageUrl = "";
-      const maxRetries = 3;
+      const maxRetries = budget.bounded() ? 1 : 3;
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
           console.log(`Page ${i + 1} attempt ${attempt}/${maxRetries} with Gemini ${modelId}...`);
-          const response = await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body)
-          });
+          const response = await postGemini("full-page", modelId, geminiApiKey, body);
           if (!response.ok) {
-            const errText = await response.text();
-            throw new Error(`Gemini error (${response.status}): ${errText.substring(0, 200)}`);
+            throw new Error(`Gemini error (${response.status}): ${JSON.stringify(response.json).slice(0, 200)}`);
           }
-          const data = await response.json();
+          const data = response.json;
           const candidates = data.candidates;
           if (!candidates || candidates.length === 0)
             throw new Error("No image candidates");
@@ -4696,7 +4791,6 @@ TITLE PLACEMENT (ABSOLUTELY CRITICAL):
 - NEVER let any letter get cut off or extend beyond any edge of the image
 - The entire title must be readable in one glance \u2014 no missing or clipped characters
 - Test mentally: if you drew a rectangle around all the title text, that rectangle must be fully inside the image with margins on all sides`;
-          const titleUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${geminiApiKey}`;
           const titleBody = {
             contents: [{
               role: "user",
@@ -4706,22 +4800,18 @@ TITLE PLACEMENT (ABSOLUTELY CRITICAL):
               ]
             }],
             generationConfig: {
-              responseModalities: ["Image"],
+              responseModalities: [...GEMINI_IMAGE_MODALITIES],
               temperature: 0.4
             }
           };
-          for (let titleAttempt = 1; titleAttempt <= 2; titleAttempt++) {
+          const titleAttempts = budget.bounded() ? 1 : 2;
+          for (let titleAttempt = 1; titleAttempt <= titleAttempts; titleAttempt++) {
             try {
-              const titleResponse = await fetch(titleUrl, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(titleBody)
-              });
+              const titleResponse = await postGemini("cover-title", modelId, geminiApiKey, titleBody);
               if (!titleResponse.ok) {
-                const errText = await titleResponse.text();
-                throw new Error(`Gemini title overlay error (${titleResponse.status}): ${errText.substring(0, 200)}`);
+                throw new Error(`Gemini title overlay error (${titleResponse.status}): ${JSON.stringify(titleResponse.json).slice(0, 200)}`);
               }
-              const titleData = await titleResponse.json();
+              const titleData = titleResponse.json;
               const titleParts = titleData.candidates?.[0]?.content?.parts;
               if (!titleParts)
                 throw new Error("No content in title overlay response");
@@ -4737,7 +4827,7 @@ TITLE PLACEMENT (ABSOLUTELY CRITICAL):
               break;
             } catch (err) {
               console.error(`Cover title attempt ${titleAttempt} failed: ${err.message}`);
-              if (titleAttempt < 2)
+              if (titleAttempt < titleAttempts)
                 await new Promise((r) => setTimeout(r, 2e3));
               else
                 console.warn(`Cover: Using artwork without title as fallback`);
@@ -4788,7 +4878,6 @@ PANEL BORDER RESPECT (CRITICAL \u2014 ZERO TOLERANCE):
 - Do NOT place a bubble that spans two panels, sits on a gutter, or has any part extending into an adjacent panel
 - If a panel is small, use a SMALLER bubble \u2014 never let a bubble spill outside its panel
 - Narration boxes must also stay within panel boundaries`;
-          const textUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${geminiApiKey}`;
           const textBody = {
             contents: [{
               role: "user",
@@ -4798,22 +4887,18 @@ PANEL BORDER RESPECT (CRITICAL \u2014 ZERO TOLERANCE):
               ]
             }],
             generationConfig: {
-              responseModalities: ["Image"],
+              responseModalities: [...GEMINI_IMAGE_MODALITIES],
               temperature: 0.4
             }
           };
-          for (let textAttempt = 1; textAttempt <= 2; textAttempt++) {
+          const textAttempts = budget.bounded() ? 1 : 2;
+          for (let textAttempt = 1; textAttempt <= textAttempts; textAttempt++) {
             try {
-              const textResponse = await fetch(textUrl, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(textBody)
-              });
+              const textResponse = await postGemini("page-text", modelId, geminiApiKey, textBody);
               if (!textResponse.ok) {
-                const errText = await textResponse.text();
-                throw new Error(`Gemini text overlay error (${textResponse.status}): ${errText.substring(0, 200)}`);
+                throw new Error(`Gemini text overlay error (${textResponse.status}): ${JSON.stringify(textResponse.json).slice(0, 200)}`);
               }
-              const textData = await textResponse.json();
+              const textData = textResponse.json;
               const textParts = textData.candidates?.[0]?.content?.parts;
               if (!textParts)
                 throw new Error("No content in text overlay response");
@@ -4829,7 +4914,7 @@ PANEL BORDER RESPECT (CRITICAL \u2014 ZERO TOLERANCE):
               break;
             } catch (err) {
               console.error(`Page ${i + 1} text overlay attempt ${textAttempt} failed: ${err.message}`);
-              if (textAttempt < 2)
+              if (textAttempt < textAttempts)
                 await new Promise((r) => setTimeout(r, 2e3));
               else
                 console.warn(`Page ${i + 1}: Using artwork without text overlay as fallback`);
@@ -6246,7 +6331,8 @@ async function registerRoutes(app2) {
       storyTextProvider: {
         ...settings.storyTextProvider,
         geminiApiKey: settings.storyTextProvider?.geminiApiKey ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" + settings.storyTextProvider.geminiApiKey.slice(-4) : ""
-      }
+      },
+      geminiEnvConfigured: !!normalizeGeminiKey(process.env.GEMINI_API_KEY)
     };
     res.json(maskedSettings);
   });
@@ -6256,7 +6342,14 @@ async function registerRoutes(app2) {
       await ensureAiSettingsLoaded();
       const currentSettings = structuredClone(aiSettings2);
       if (newSettings.openai.apiKey && !newSettings.openai.apiKey.startsWith("****")) {
-        currentSettings.openai.apiKey = newSettings.openai.apiKey;
+        const candidate = newSettings.openai.apiKey.trim();
+        if (!isUsableOpenAIKey(candidate)) {
+          res.status(400).json({
+            error: "OpenAI API key must start with sk- and be a standard OpenAI key."
+          });
+          return;
+        }
+        currentSettings.openai.apiKey = candidate;
       }
       currentSettings.openai.enabled = newSettings.openai.enabled;
       if (newSettings.replicate.apiKey && !newSettings.replicate.apiKey.startsWith("****")) {
@@ -6302,7 +6395,12 @@ async function registerRoutes(app2) {
       currentSettings.stability.enabled = newSettings.stability.enabled;
       if (newSettings.geminiImage) {
         if (newSettings.geminiImage.apiKey && !newSettings.geminiImage.apiKey.startsWith("****")) {
-          currentSettings.geminiImage.apiKey = newSettings.geminiImage.apiKey;
+          const candidate = newSettings.geminiImage.apiKey.trim();
+          if (!candidate || /\s/.test(candidate)) {
+            res.status(400).json({ error: "Gemini API key must not contain whitespace." });
+            return;
+          }
+          currentSettings.geminiImage.apiKey = candidate;
         }
         currentSettings.geminiImage.enabled = newSettings.geminiImage.enabled;
         if (newSettings.geminiImage.model) {
@@ -6332,7 +6430,7 @@ async function registerRoutes(app2) {
       }
       if (newSettings.storyTextProvider) {
         if (!currentSettings.storyTextProvider) {
-          currentSettings.storyTextProvider = { provider: "openai", openaiModel: "gpt-4o", geminiModel: "gemini-2.0-flash", geminiApiKey: "", replicateModel: "meta/meta-llama-3-70b-instruct" };
+          currentSettings.storyTextProvider = { provider: "openai", openaiModel: "gpt-4o", geminiModel: GEMINI_TEXT_MODEL, geminiApiKey: "", replicateModel: "meta/meta-llama-3-70b-instruct" };
         }
         if (newSettings.storyTextProvider.provider) {
           currentSettings.storyTextProvider.provider = newSettings.storyTextProvider.provider;
@@ -6344,7 +6442,12 @@ async function registerRoutes(app2) {
           currentSettings.storyTextProvider.geminiModel = newSettings.storyTextProvider.geminiModel;
         }
         if (newSettings.storyTextProvider.geminiApiKey && !newSettings.storyTextProvider.geminiApiKey.startsWith("\u2022\u2022")) {
-          currentSettings.storyTextProvider.geminiApiKey = newSettings.storyTextProvider.geminiApiKey;
+          const candidate = newSettings.storyTextProvider.geminiApiKey.trim();
+          if (!candidate || /\s/.test(candidate)) {
+            res.status(400).json({ error: "Gemini API key must not contain whitespace." });
+            return;
+          }
+          currentSettings.storyTextProvider.geminiApiKey = candidate;
         }
         if (newSettings.storyTextProvider.replicateModel) {
           currentSettings.storyTextProvider.replicateModel = newSettings.storyTextProvider.replicateModel;
@@ -8120,7 +8223,7 @@ async function registerRoutes(app2) {
   const httpServer = createServer(app2);
   return httpServer;
 }
-var MAX_STORY_PROMPT_LENGTH, MAX_CHARACTER_IMAGE_BYTES, JWT_SECRET, PARALLEL_BATCH_SIZE, BATCH_DELAY_MS, ADMIN_PASSWORD, adminTokens, requireAuth, SETTINGS_FILE, aiSettings2, MAX_COMIC_JOB_STALLS, JobStepBudget, REMOTE_IMAGE_FETCH_MS;
+var MAX_STORY_PROMPT_LENGTH, MAX_CHARACTER_IMAGE_BYTES, JWT_SECRET, PARALLEL_BATCH_SIZE, BATCH_DELAY_MS, ADMIN_PASSWORD, adminTokens, requireAuth, SETTINGS_FILE, aiSettings2, JobStepBudget, REMOTE_IMAGE_FETCH_MS;
 var init_routes = __esm({
   "server/routes.ts"() {
     "use strict";
@@ -8131,6 +8234,9 @@ var init_routes = __esm({
     init_schema();
     init_email();
     init_notifications();
+    init_comicJobStall();
+    init_openaiCredential();
+    init_geminiCredential();
     MAX_STORY_PROMPT_LENGTH = 4e3;
     MAX_CHARACTER_IMAGE_BYTES = 5 * 1024 * 1024;
     JWT_SECRET = requiredProductionSecret("SESSION_SECRET", "fallback-jwt-secret-key");
@@ -8141,7 +8247,6 @@ var init_routes = __esm({
     requireAuth = requireAdminAuth;
     SETTINGS_FILE = path.join(process.cwd(), ".ai-settings.json");
     aiSettings2 = buildDefaultSettings();
-    MAX_COMIC_JOB_STALLS = 12;
     JobStepBudget = class {
       left;
       checkpoint;
