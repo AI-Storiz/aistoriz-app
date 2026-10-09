@@ -74,7 +74,7 @@
     "jszip": "^3.10.1",
     "lottie-react-native": "^7.3.8",
     "openai": "^6.38.0",
-    "p-limit": "^7.3.0",
+    "p-limit": "3.1.0",
     "p-retry": "^7.1.1",
     "pg": "^8.21.0",
     "react": "19.1.0",
