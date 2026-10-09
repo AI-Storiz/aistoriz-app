@@ -601,32 +601,22 @@ async function saveSettings(settings: AISettings): Promise<void> {
   aiSettings = toSave;
 }
 
-function isStoredOpenAIKey(apiKey: string | undefined | null): apiKey is string {
-  return !!apiKey &&
-    !apiKey.includes("DUMMY") &&
-    apiKey.length > 10 &&
-    apiKey.startsWith("sk-");
-}
-
 function getOpenAIClient(): OpenAI {
+  // Only use admin-configured API key - no Replit fallbacks
   const adminKey = aiSettings.openai.apiKey;
-  if (isStoredOpenAIKey(adminKey)) {
-    return new OpenAI({
-      apiKey: adminKey,
-      baseURL: "https://api.openai.com/v1",
-    });
+  const isValidAdminKey = adminKey && 
+                          !adminKey.includes('DUMMY') && 
+                          adminKey.length > 10 &&
+                          adminKey.startsWith('sk-');
+  
+  if (!isValidAdminKey) {
+    throw new Error("OpenAI API key not configured. Please set a valid API key in the admin panel.");
   }
-
-  // Admin panel has no OpenAI key field. Replit and Vercel supply the integration key.
-  const envKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY?.trim();
-  if (envKey && !envKey.includes("DUMMY") && envKey.length > 10) {
-    return new OpenAI({
-      apiKey: envKey,
-      baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1",
-    });
-  }
-
-  throw new Error("OpenAI API key not configured. Please set a valid API key in the admin panel.");
+  
+  return new OpenAI({
+    apiKey: adminKey,
+    baseURL: "https://api.openai.com/v1",
+  });
 }
 
 async function generateTextWithGemini(
