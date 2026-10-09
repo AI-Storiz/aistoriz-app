@@ -3,6 +3,10 @@
   "compilerOptions": {
     "strict": true,
     "esModuleInterop": true,
+    // Repeated here, not only via `extends`. Vercel's Node builder injects
+    // NodeNext when the raw file omits `module`, which rejects the worker imports.
+    "module": "preserve",
+    "moduleResolution": "bundler",
     "paths": {
       "@/*": ["./client/*"],
       "@shared/*": ["./shared/*"]

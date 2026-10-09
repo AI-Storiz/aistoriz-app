@@ -745,6 +745,91 @@ interface GenerateComicRequest {
   scenesPerPage: number;
   title?: string;
   language?: string;
+  _checkpoint?: ComicCheckpoint;
+}
+
+/** Work already finished for a job. Stored on `comic_jobs.request_payload` so a later invocation can continue. */
+type ComicCheckpoint = {
+  v: 1;
+  story?: unknown;
+  stylized?: { name: string; mimeType: string; base64: string; url?: string }[];
+  outfits?: Record<string, string>;
+  adaptedOutfits?: Record<string, string>;
+  comicCharacters?: { name: string; imageUrl: string }[];
+  villainAnchor?: string | null;
+  villainDone?: boolean;
+  /** Panels finished for the page currently being generated. Cleared once that page is stored. */
+  partialPanels?: {
+    pageNumber: number;
+    panels: { imageUrl: string; desc: string; dialogue: string; cameraAngle: string }[];
+  };
+  stalls?: number;
+};
+
+/** A platform kill mid-step requeues the job. After this many kills, the job is failed and refunded once. */
+const MAX_COMIC_JOB_STALLS = 12;
+
+function readCheckpoint(payload: unknown): ComicCheckpoint {
+  if (!payload || typeof payload !== "object") return { v: 1 };
+  const raw = (payload as { _checkpoint?: ComicCheckpoint })._checkpoint;
+  if (!raw || raw.v !== 1) return { v: 1 };
+  return raw;
+}
+
+export type ComicJobRunOptions = { maxSteps?: number };
+
+/**
+ * `maxSteps` limits how many model-backed units run in this process.
+ * The CLI worker omits it and runs until the job is done. Vercel passes 1.
+ */
+class JobStepBudget {
+  private left: number;
+  readonly checkpoint: ComicCheckpoint;
+  private readonly base: GenerateComicRequest;
+
+  constructor(params: GenerateComicRequest, maxSteps?: number) {
+    this.base = params;
+    this.checkpoint = readCheckpoint(params);
+    this.left = maxSteps ?? Number.POSITIVE_INFINITY;
+  }
+
+  payload(): GenerateComicRequest {
+    return { ...this.base, _checkpoint: this.checkpoint };
+  }
+
+  /** True when this process must not run the whole page in one call. */
+  bounded(): boolean {
+    return Number.isFinite(this.left);
+  }
+
+  /**
+   * Call after one finished unit has been copied onto `checkpoint`.
+   * Returns true when this invocation must stop. The job is left `pending`
+   * with its payload saved, so the next poll can claim it.
+   */
+  async shouldStop(job: ComicJob): Promise<boolean> {
+    this.checkpoint.stalls = 0;
+    job.requestPayload = this.payload();
+    if (!Number.isFinite(this.left)) return false;
+    this.left -= 1;
+    if (this.left > 0) return false;
+    job.status = "pending";
+    console.log(`[job] ${job.id} paused after one step (progress ${job.progress})`);
+    await saveJobToDb(job);
+    return true;
+  }
+}
+
+/** Bump the stall count after a dead invocation. `null` means the job should be failed and refunded. */
+export function requeuePayloadAfterStall(payload: unknown): GenerateComicRequest | null {
+  if (!payload || typeof payload !== "object") return null;
+  const row = payload as GenerateComicRequest;
+  if (typeof row.storyPrompt !== "string" || typeof row.style !== "string") return null;
+  const checkpoint = readCheckpoint(payload);
+  const stalls = (checkpoint.stalls ?? 0) + 1;
+  if (stalls > MAX_COMIC_JOB_STALLS) return null;
+  checkpoint.stalls = stalls;
+  return { ...row, _checkpoint: checkpoint };
 }
 
 interface ComicPanel {
@@ -801,13 +886,51 @@ function userFacingJobPersistError(err: unknown): string {
   return "We couldn't save your comic progress. Please try again.";
 }
 
+/** Copy checkpoint images into Supabase Storage and keep only those public URLs on the job row. */
+async function persistCheckpointImages(job: ComicJob): Promise<void> {
+  const checkpoint = job.requestPayload?._checkpoint;
+  if (!checkpoint || !job.userId) return;
+  const userId = job.userId;
+
+  const store = (value: string) => uploadCharacterPhotoToS3OrThrow(userId, value);
+
+  if (checkpoint.stylized) {
+    for (const row of checkpoint.stylized) {
+      if (row.url) continue;
+      if (!row.base64) continue;
+      const source =
+        row.base64.startsWith("data:") || row.base64.startsWith("http")
+          ? row.base64
+          : `data:${row.mimeType || "image/png"};base64,${row.base64}`;
+      row.url = await store(source);
+      row.base64 = "";
+    }
+  }
+  if (checkpoint.comicCharacters) {
+    for (const row of checkpoint.comicCharacters) {
+      if (!row.imageUrl) continue;
+      row.imageUrl = await store(row.imageUrl);
+    }
+  }
+  if (checkpoint.villainAnchor) {
+    checkpoint.villainAnchor = await store(checkpoint.villainAnchor);
+  }
+  if (checkpoint.partialPanels) {
+    for (const panel of checkpoint.partialPanels.panels) {
+      if (!panel.imageUrl) continue;
+      panel.imageUrl = await store(panel.imageUrl);
+    }
+  }
+}
+
 async function saveJobToDb(job: ComicJob): Promise<void> {
   try {
+    await persistCheckpointImages(job);
     if (
       job.userId &&
       Array.isArray(job.pages) &&
       job.pages.length > 0 &&
-      comicPagesContainNonAssetImages(job.pages)
+      comicPagesNeedS3Ingest(job.pages)
     ) {
       await ensureLibraryComicDraftForJob(job, {
         title: job.title || "Untitled Comic",
@@ -906,6 +1029,7 @@ async function getJobFromDb(jobId: string): Promise<ComicJob | null> {
         pages: stripNonAssetImagesFromComicPagesJson(dbJob.pages || []) as ComicPage[],
         error: dbJob.error || undefined,
         libraryComicId: dbJob.libraryComicId ?? undefined,
+        requestPayload: (dbJob.requestPayload as GenerateComicRequest | null) ?? undefined,
         createdAt: new Date(dbJob.createdAt).getTime(),
       };
       return job;
@@ -1868,18 +1992,27 @@ async function generateImageWithProvider(provider: string, prompt: string, refer
   }
 }
 
-async function processComicJobGeminiFullPage(jobId: string, params: GenerateComicRequest) {
+async function processComicJobGeminiFullPage(
+  jobId: string,
+  params: GenerateComicRequest,
+  options?: ComicJobRunOptions,
+) {
   const job = await getJobFromDb(jobId);
-  if (!job) return;
+  if (!job || job.status === "completed") return;
 
+  const budget = new JobStepBudget(params, options?.maxSteps);
+  const checkpoint = budget.checkpoint;
   const { storyPrompt, style, characters, pagesCount, title, language } = params;
 
   const characterNames = (characters || []).map(c => c.name).filter(Boolean);
   job.characterNames = characterNames;
+  job.requestPayload = budget.payload();
 
   try {
     job.status = "processing";
-    job.progress = 5;
+    if (!checkpoint.story && job.pages.length === 0) {
+      job.progress = 5;
+    }
     await ensureLibraryComicDraftForJob(job, {
       title: job.title || title,
       style: job.style || style,
@@ -2043,16 +2176,26 @@ Format as JSON:
 - If the title describes the plot (e.g. "The Great Adventure"), characters should NOT say "this is a great adventure" or similar phrases that echo the title
 - Narration boxes should also NOT repeat or reference the title — use original narration text`;
 
-    job.progress = 10;
-    await saveJobToDb(job);
+    let story = checkpoint.story as { title?: string; pages?: any[] } | undefined;
+    if (!story) {
+      job.progress = Math.max(job.progress, 10);
+      await saveJobToDb(job);
 
-    const storyContent = await generateTextWithProvider(storySystemPrompt, storyPromptText, { type: "json_object" });
-    if (!storyContent) throw new Error("No story content generated");
+      const storyContent = await generateTextWithProvider(storySystemPrompt, storyPromptText, { type: "json_object" });
+      if (!storyContent) throw new Error("No story content generated");
 
-    const story = JSON.parse(storyContent);
-    job.title = story.title || title;
-    job.progress = 20;
-    await saveJobToDb(job);
+      const parsed = JSON.parse(storyContent) as { title?: string; pages?: any[] };
+      story = parsed;
+      checkpoint.story = parsed;
+      job.title = parsed.title || title;
+      job.progress = 20;
+      job.requestPayload = budget.payload();
+      await saveJobToDb(job);
+      if (await budget.shouldStop(job)) return;
+    } else {
+      job.title = story.title || job.title || title;
+    }
+    if (!story) throw new Error("No story content generated");
 
     const geminiApiKey = aiSettings.geminiImage.apiKey || aiSettings.storyTextProvider.geminiApiKey;
     if (!geminiApiKey) {
@@ -2068,6 +2211,19 @@ Format as JSON:
     // === PHASE 0: Transform character photos into art style ===
     // This creates stylized character portraits that Gemini can consistently reference
     const stylizedCharacters: Map<string, { base64: string; mimeType: string }> = new Map();
+    for (const saved of checkpoint.stylized || []) {
+      if (saved.url) {
+        const imageResponse = await fetch(saved.url);
+        if (!imageResponse.ok) continue;
+        const mime = (imageResponse.headers.get("content-type") || saved.mimeType || "image/png").split(";")[0]!;
+        stylizedCharacters.set(saved.name, {
+          base64: Buffer.from(await imageResponse.arrayBuffer()).toString("base64"),
+          mimeType: mime,
+        });
+      } else if (saved.base64) {
+        stylizedCharacters.set(saved.name, { base64: saved.base64, mimeType: saved.mimeType });
+      }
+    }
 
     if (charactersWithImages.length > 0) {
       console.log(`=== GEMINI FULL-PAGE: Transforming ${charactersWithImages.length} character(s) into ${style} style ===`);
@@ -2075,6 +2231,7 @@ Format as JSON:
       await saveJobToDb(job);
 
       for (const charData of charactersWithImages) {
+        if (stylizedCharacters.has(charData.name)) continue;
         try {
           let rawBase64: string;
           let rawMime = 'image/png';
@@ -2168,6 +2325,16 @@ CRITICAL INSTRUCTIONS:
           }
 
           stylizedCharacters.set(charData.name, { base64: stylizedBase64, mimeType: stylizedMime });
+          checkpoint.stylized = Array.from(stylizedCharacters, ([name, image]) => {
+            const previous = checkpoint.stylized?.find((row) => row.name === name);
+            if (previous?.url) {
+              return { name, mimeType: image.mimeType, base64: "", url: previous.url };
+            }
+            return { name, mimeType: image.mimeType, base64: image.base64 };
+          });
+          job.requestPayload = budget.payload();
+          await saveJobToDb(job);
+          if (await budget.shouldStop(job)) return;
         } catch (err: any) {
           console.error(`Failed to process character "${charData.name}": ${err.message}`);
         }
@@ -2181,6 +2348,7 @@ CRITICAL INSTRUCTIONS:
     for (let i = 0; i < totalPages; i++) {
       const page = story.pages?.[i];
       if (!page) continue;
+      if (job.pages.some((existing) => existing.pageNumber === i + 1)) continue;
 
       const pageType = page.pageType || (i === 0 ? 'cover' : (i === totalPages - 1 ? 'conclusion' : 'body'));
       const isCover = pageType === 'cover';
@@ -2544,7 +2712,9 @@ PANEL BORDER RESPECT (CRITICAL — ZERO TOLERANCE):
 
       const pageProgress = 20 + ((i + 1) / totalPages) * 70;
       job.progress = Math.round(pageProgress);
+      job.requestPayload = budget.payload();
       await saveJobToDb(job);
+      if (await budget.shouldStop(job)) return;
     }
 
     console.log(`Job ${jobId} completed with ${job.pages.length} full pages via Gemini`);
@@ -2725,27 +2895,36 @@ function buildNarrativeArcForFullPage(totalPages: number): string {
   return parts.join('\n\n');
 }
 
-export async function processComicJob(jobId: string, params: GenerateComicRequest) {
+export async function processComicJob(
+  jobId: string,
+  params: GenerateComicRequest,
+  options?: ComicJobRunOptions,
+) {
   await ensureAiSettingsLoaded();
   if (aiSettings.comicGenerationMode === 'gemini-fullpage') {
     console.log(`=== Using GEMINI FULL-PAGE generation mode ===`);
-    return processComicJobGeminiFullPage(jobId, params);
+    return processComicJobGeminiFullPage(jobId, params, options);
   }
   
   console.log(`=== Using MULTI-MODEL generation mode ===`);
   
   const job = await getJobFromDb(jobId);
-  if (!job) return;
+  if (!job || job.status === "completed") return;
 
+  const budget = new JobStepBudget(params, options?.maxSteps);
+  const checkpoint = budget.checkpoint;
   const { storyPrompt, style, characters, pagesCount, title, language } = params;
   
   // Store character names for auto-save
   const characterNames = (characters || []).map(c => c.name).filter(Boolean);
   job.characterNames = characterNames;
+  job.requestPayload = budget.payload();
 
   try {
     job.status = "processing";
-    job.progress = 10;
+    if (!checkpoint.story && job.pages.length === 0) {
+      job.progress = 10;
+    }
     await ensureLibraryComicDraftForJob(job, {
       title: job.title || title,
       style: job.style || style,
@@ -2784,8 +2963,11 @@ export async function processComicJob(jobId: string, params: GenerateComicReques
 
     // === PHASE 0: Detect outfits from uploaded character photos ===
     const characterOutfits: Map<string, string> = new Map();
-    
-    if (charactersWithImages.length > 0) {
+    if (checkpoint.outfits) {
+      for (const [name, outfit] of Object.entries(checkpoint.outfits)) {
+        characterOutfits.set(name, outfit);
+      }
+    } else if (charactersWithImages.length > 0) {
       console.log(`=== PHASE 0: Detecting outfits from uploaded character photos ===`);
       
       // Detect outfits in parallel for efficiency
@@ -2803,6 +2985,12 @@ export async function processComicJob(jobId: string, params: GenerateComicReques
       }
       
       console.log(`=== PHASE 0 COMPLETE: Detected outfits for ${characterOutfits.size} character(s) ===`);
+      checkpoint.outfits = Object.fromEntries(characterOutfits);
+      job.requestPayload = budget.payload();
+      await saveJobToDb(job);
+      if (await budget.shouldStop(job)) return;
+    } else {
+      checkpoint.outfits = {};
     }
 
     // Build detailed character descriptions for AI - include appearance if provided
@@ -3082,7 +3270,8 @@ REMEMBER:
 - The story should feel like a JOURNEY with clear beginning, middle, and end.
 - Emotional tone should shift naturally through the arc: calm -> tense -> intense -> relieved.`;
 
-    job.progress = 20;
+    job.progress = Math.max(job.progress, 20);
+    job.requestPayload = budget.payload();
     await saveJobToDb(job);
 
     const storySystemPrompt = `You are a professional comic book story writer who creates compelling, well-paced narratives with natural dialogue flow. Your stories read like real published comics — each page connects smoothly to the next, dialogue feels natural and advances the plot, and the emotional arc builds from beginning to end.
@@ -3122,18 +3311,40 @@ KEY PATTERNS TO REPLICATE:
 - The LAST line of the comic echoes the hero's journey
 === END OF EXAMPLE ===`;
     
-    const storyContent = await generateTextWithProvider(storySystemPrompt, storyPromptText, { type: "json_object" });
-    if (!storyContent) {
-      throw new Error("No story content generated");
-    }
+    let story = checkpoint.story as {
+      title?: string;
+      pages?: any[];
+      villainDescription?: string;
+    } | undefined;
+    if (!story) {
+      const storyContent = await generateTextWithProvider(storySystemPrompt, storyPromptText, { type: "json_object" });
+      if (!storyContent) {
+        throw new Error("No story content generated");
+      }
 
-    const story = JSON.parse(storyContent);
-    job.title = story.title || title;
+      const parsed = JSON.parse(storyContent) as {
+        title?: string;
+        pages?: any[];
+        villainDescription?: string;
+      };
+      story = parsed;
+      checkpoint.story = parsed;
+      job.title = parsed.title || title;
+      job.requestPayload = budget.payload();
+      await saveJobToDb(job);
+      if (await budget.shouldStop(job)) return;
+    } else {
+      job.title = story.title || job.title || title;
+    }
+    if (!story) throw new Error("No story content generated");
     
     // === PHASE 0.5: Adapt detected outfits to story context ===
     const adaptedOutfits: Map<string, string> = new Map();
-    
-    if (characterOutfits.size > 0) {
+    if (checkpoint.adaptedOutfits) {
+      for (const [name, outfit] of Object.entries(checkpoint.adaptedOutfits)) {
+        adaptedOutfits.set(name, outfit);
+      }
+    } else if (characterOutfits.size > 0) {
       console.log(`=== PHASE 0.5: Adapting outfits to story context ===`);
       
       // Adapt outfits in parallel
@@ -3150,6 +3361,12 @@ KEY PATTERNS TO REPLICATE:
       }
       
       console.log(`=== PHASE 0.5 COMPLETE: Adapted ${adaptedOutfits.size} outfit(s) to story ===`);
+      checkpoint.adaptedOutfits = Object.fromEntries(adaptedOutfits);
+      job.requestPayload = budget.payload();
+      await saveJobToDb(job);
+      if (await budget.shouldStop(job)) return;
+    } else {
+      checkpoint.adaptedOutfits = {};
     }
     
     // VALIDATION: Ensure minimum panels per page
@@ -3262,6 +3479,9 @@ KEY PATTERNS TO REPLICATE:
     // Then reuse these generated images for all pages with FLUX Schnell
     // Use a Map to prevent index misalignment when a character's conversion fails
     const comicStyleCharacterMap: Map<string, string> = new Map();
+    for (const saved of checkpoint.comicCharacters || []) {
+      comicStyleCharacterMap.set(saved.name, saved.imageUrl);
+    }
     
     if (characterReferenceImages.length > 0 && 
         aiSettings.replicate.models.fluxKontextDev.enabled) {
@@ -3277,6 +3497,7 @@ KEY PATTERNS TO REPLICATE:
         const charData = charactersWithImages[charIdx];
         const refImage = charData.imageUri;
         const charName = charData.name || `Character ${charIdx + 1}`;
+        if (comicStyleCharacterMap.has(charName)) continue;
         const charDescription = charData.description || "";
         
         try {
@@ -3350,7 +3571,13 @@ This person's identity must be preserved - someone who knows them should recogni
         // Update progress for character conversion phase (30-40%)
         const charProgress = 30 + ((charIdx + 1) / characterReferenceImages.length) * 10;
         job.progress = Math.round(charProgress);
+        checkpoint.comicCharacters = Array.from(comicStyleCharacterMap, ([name, imageUrl]) => ({
+          name,
+          imageUrl,
+        }));
+        job.requestPayload = budget.payload();
         await saveJobToDb(job);
+        if (await budget.shouldStop(job)) return;
       }
       
       console.log(`=== PHASE 1 COMPLETE: Created ${comicStyleCharacterMap.size} comic-style character(s) ===`);
@@ -3397,7 +3624,11 @@ This person's identity must be preserved - someone who knows them should recogni
     
     // Pre-generate villain anchor if story has a villain
     const villainDescription = story.villainDescription;
-    if (villainDescription && villainDescription.length > 10) {
+    if (checkpoint.villainDone) {
+      if (checkpoint.villainAnchor) {
+        characterAnchors.set("__VILLAIN__", checkpoint.villainAnchor);
+      }
+    } else if (villainDescription && villainDescription.length > 10) {
       console.log(`=== PHASE 1.5: Generating villain anchor image ===`);
       console.log(`Villain description: ${villainDescription}`);
       
@@ -3412,11 +3643,18 @@ Professional illustration, high quality, NO text, NO speech bubbles.`;
         const villainAnchorUrl = await generateImage(villainPrompt);
         if (villainAnchorUrl) {
           characterAnchors.set("__VILLAIN__", villainAnchorUrl);
+          checkpoint.villainAnchor = villainAnchorUrl;
           console.log(`Villain anchor image generated successfully`);
         }
       } catch (villainError: any) {
         console.error(`Failed to generate villain anchor: ${villainError.message}`);
       }
+      checkpoint.villainDone = true;
+      job.requestPayload = budget.payload();
+      await saveJobToDb(job);
+      if (await budget.shouldStop(job)) return;
+    } else {
+      checkpoint.villainDone = true;
     }
     
     console.log(`=== ANCHOR MAP: ${characterAnchors.size} character(s) with anchors ===`);
@@ -3755,11 +3993,79 @@ Dramatic professional cover art, eye-catching cinematic composition.`;
         console.log(`Page ${i + 1} not found in story response, skipping`);
         continue;
       }
+      if (job.pages.some((existing) => existing.pageNumber === i + 1)) {
+        completedPanels += page.panels?.length || 1;
+        continue;
+      }
       
       const pageType = page.pageType || (i === 0 ? 'cover' : (i === totalPages - 1 ? 'conclusion' : 'body'));
       const panels = page.panels || [{ sceneDescription: page.sceneDescription, dialogue: page.dialogue }];
       
       console.log(`=== Generating Page ${i + 1} (${pageType}) with ${panels.length} panel(s) ===`);
+
+      if (budget.bounded()) {
+        const stored =
+          checkpoint.partialPanels?.pageNumber === i + 1 ? checkpoint.partialPanels.panels : [];
+        const partials = stored.slice();
+        if (partials.length < panels.length) {
+          const panel = panels[partials.length];
+          const panelIndex = partials.length;
+          const desc = panel.sceneDescription || panel.description || "A scene from the story";
+          const dialogue = panel.dialogue || "";
+          const cameraAngle = panel.cameraAngle || "";
+          let imageUrl = "";
+          try {
+            imageUrl =
+              pageType === "cover" && panelIndex === 0
+                ? await generateCoverImage(desc)
+                : await generatePanelImage(desc, i * 10 + panelIndex, {
+                    characterName: panel.characterName || undefined,
+                    isVillain: panel.isVillain || false,
+                    isSupportingCharacter: panel.isSupportingCharacter || false,
+                    villainDescription: storyVillainDescription || undefined,
+                  });
+          } catch (err: any) {
+            console.error(`Panel ${panelIndex + 1} of page ${i + 1} failed:`, err.message);
+          }
+          partials.push({ imageUrl, desc, dialogue, cameraAngle });
+          checkpoint.partialPanels = { pageNumber: i + 1, panels: partials };
+          completedPanels += partials.length;
+          const panelProgress =
+            pageProgressStart +
+            (completedPanels / Math.max(totalPanels, 1)) * (90 - pageProgressStart);
+          job.progress = Math.max(job.progress, Math.round(panelProgress));
+          job.requestPayload = budget.payload();
+          await saveJobToDb(job);
+          if (partials.length < panels.length) {
+            if (await budget.shouldStop(job)) return;
+            continue;
+          }
+        }
+
+        const finished = checkpoint.partialPanels?.panels || partials;
+        job.pages.push({
+          pageNumber: i + 1,
+          pageType: pageType,
+          imageUrl: finished[0]?.imageUrl || "",
+          panelImages: finished.map((panel) => panel.imageUrl),
+          scenes: {
+            description: finished.map((panel) => panel.desc).join(" | "),
+            dialogue: finished.map((panel) => panel.dialogue).filter((line) => line).join(" | "),
+          },
+          panels: finished.map((panel) => ({
+            description: panel.desc,
+            dialogue: panel.dialogue,
+            cameraAngle: panel.cameraAngle,
+          })),
+          generationMode: "multi-model",
+        });
+        checkpoint.partialPanels = undefined;
+        job.requestPayload = budget.payload();
+        await saveJobToDb(job);
+        console.log(`Page ${i + 1} completed with ${finished.length} panel(s)`);
+        if (await budget.shouldStop(job)) return;
+        continue;
+      }
       
       const panelImages: string[] = [];
       const panelData: Array<{ description: string; dialogue: string; cameraAngle?: string }> = [];
@@ -3914,6 +4220,7 @@ Dramatic professional cover art, eye-catching cinematic composition.`;
       });
       await saveJobToDb(job);
       console.log(`Page ${i + 1} completed with ${panelImages.length} panel(s)`);
+      if (await budget.shouldStop(job)) return;
     }
 
     console.log(`Job ${jobId} completed with ${job.pages.length} pages, total panels generated`);

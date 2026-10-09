@@ -248,20 +248,16 @@ export async function uploadCharacterPhotoToS3OrThrow(userId: string, imageData:
   return publicObjectUrl(key);
 }
 
+/** True when the URL is already an object in this app's Supabase Storage bucket. AWS S3 is not a write target. */
 function isOnOurStorageHttps(url: string): boolean {
   const t = url.trim();
   if (t.length === 0) {
     return true;
   }
-  if (!t.startsWith("https://")) {
+  if (!PUBLIC_BASE || !t.startsWith("https://")) {
     return false;
   }
-  for (const origin of ALLOWED_ORIGINS) {
-    if (t === origin || t.startsWith(origin + "/")) {
-      return true;
-    }
-  }
-  return false;
+  return t === PUBLIC_BASE || t.startsWith(`${PUBLIC_BASE}/`);
 }
 
 function mediaReferenceNeedsS3Upload(value: unknown): value is string {
@@ -411,7 +407,7 @@ async function putS3ObjectOrThrow(
     name: error.name,
     message: error.message,
   });
-  throw new ComicS3Error("S3 upload failed", "INGEST_FAILED", detail);
+  throw new ComicS3Error("Storage upload failed", "INGEST_FAILED", detail);
 }
 
 const PING_PNG_1X1 = Buffer.from(

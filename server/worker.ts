@@ -4,12 +4,11 @@ import { waitUntil } from "@vercel/functions";
 /**
  * Comic generation worker.
  *
- * `npm run worker` is the always-on process. On Vercel that process is never
- * started, so `scheduleComicWorker()` runs the same claim/lock path inside the
- * serverless invocation after a job is queued or polled.
- *
- * Set before the database module loads when this file is the process entry,
- * so the pg pool uses max=5. `npm run worker` relies on this assignment.
+ * `npm run worker` claims a job and runs it to completion, resuming from the
+ * checkpoint stored on the row. Vercel never starts that process. Each
+ * serverless invocation claims one job and runs a single step, then returns
+ * the row to `pending` so the next poll continues it. Credits are charged
+ * once when the job is created, not when a step runs.
  */
 function isWorkerCli(): boolean {
   return process.argv.some((arg) =>
@@ -44,50 +43,43 @@ type ClaimedJob = {
   request_payload: unknown;
 };
 
-type WorkerDeps = {
-  db: typeof import("./db").db;
-  comicJobs: typeof import("../shared/schema").comicJobs;
-  storage: typeof import("./storage").storage;
-  processComicJob: typeof import("./routes").processComicJob;
-  refundCreditsForFailedJob: typeof import("./routes").refundCreditsForFailedJob;
-  ensureAiSettingsLoaded: typeof import("./routes").ensureAiSettingsLoaded;
-  waitForDatabase: typeof import("./db").waitForDatabase;
-  and: typeof import("drizzle-orm").and;
-  eq: typeof import("drizzle-orm").eq;
-  isNull: typeof import("drizzle-orm").isNull;
-  lt: typeof import("drizzle-orm").lt;
-  or: typeof import("drizzle-orm").or;
-  sql: typeof import("drizzle-orm").sql;
-};
+/**
+ * Deferred on purpose. `routes.ts` statically imports this module, so a
+ * top-level import of `./routes` would be a cycle and `processComicJob`
+ * could still be uninitialized.
+ */
+async function importWorkerDeps() {
+  const { and, eq, isNull, lt, or, sql } = await import("drizzle-orm");
+  const { db, waitForDatabase } = await import("./db.js");
+  const { comicJobs } = await import("../shared/schema.js");
+  const { storage } = await import("./storage.js");
+  const { ensureAiSettingsLoaded, processComicJob, refundCreditsForFailedJob, requeuePayloadAfterStall } =
+    await import("./routes.js");
+  return {
+    db,
+    comicJobs,
+    storage,
+    processComicJob,
+    refundCreditsForFailedJob,
+    ensureAiSettingsLoaded,
+    requeuePayloadAfterStall,
+    waitForDatabase,
+    and,
+    eq,
+    isNull,
+    lt,
+    or,
+    sql,
+  };
+}
+
+type WorkerDeps = Awaited<ReturnType<typeof importWorkerDeps>>;
 
 let depsPromise: Promise<WorkerDeps> | null = null;
 
 function loadDeps(): Promise<WorkerDeps> {
   if (!depsPromise) {
-    depsPromise = (async () => {
-      const { and, eq, isNull, lt, or, sql } = await import("drizzle-orm");
-      const { db, waitForDatabase } = await import("./db");
-      const { comicJobs } = await import("../shared/schema");
-      const { storage } = await import("./storage");
-      const { ensureAiSettingsLoaded, processComicJob, refundCreditsForFailedJob } = await import(
-        "./routes"
-      );
-      return {
-        db,
-        comicJobs,
-        storage,
-        processComicJob,
-        refundCreditsForFailedJob,
-        ensureAiSettingsLoaded,
-        waitForDatabase,
-        and,
-        eq,
-        isNull,
-        lt,
-        or,
-        sql,
-      };
-    })();
+    depsPromise = importWorkerDeps();
   }
   return depsPromise;
 }
@@ -173,11 +165,15 @@ async function abandonProcessingJob(
   });
 }
 
-async function failStaleJobs(deps: WorkerDeps): Promise<void> {
-  const { and, eq, isNull, lt, or, db, comicJobs } = deps;
-  const cutoff = new Date(Date.now() - staleMs());
+async function failStaleJobs(deps: WorkerDeps, limit?: number, staleOverrideMs?: number): Promise<void> {
+  const { and, eq, isNull, lt, or, db, comicJobs, requeuePayloadAfterStall } = deps;
+  const cutoff = new Date(Date.now() - (staleOverrideMs ?? staleMs()));
   const stale = await db
-    .select({ id: comicJobs.id, heartbeatAt: comicJobs.heartbeatAt })
+    .select({
+      id: comicJobs.id,
+      heartbeatAt: comicJobs.heartbeatAt,
+      requestPayload: comicJobs.requestPayload,
+    })
     .from(comicJobs)
     .where(
       and(
@@ -185,10 +181,36 @@ async function failStaleJobs(deps: WorkerDeps): Promise<void> {
         or(isNull(comicJobs.heartbeatAt), lt(comicJobs.heartbeatAt, cutoff)),
       ),
     );
+  const batch = limit === undefined ? stale : stale.slice(0, limit);
 
-  for (const job of stale) {
-    console.log(`[worker] Stale job ${job.id} (heartbeat ${job.heartbeatAt?.toISOString() ?? "none"})`);
-    await abandonProcessingJob(deps, job.id, "Generation stalled. Please try again.", cutoff);
+  for (const job of batch) {
+    const nextPayload = requeuePayloadAfterStall(job.requestPayload);
+    if (!nextPayload) {
+      console.log(`[worker] Stale job ${job.id} cannot resume; failing it`);
+      await abandonProcessingJob(deps, job.id, "Generation stalled. Please try again.", cutoff);
+      continue;
+    }
+
+    const released = await db
+      .update(comicJobs)
+      .set({
+        status: "pending",
+        requestPayload: nextPayload,
+        error: null,
+        heartbeatAt: null,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(comicJobs.id, job.id),
+          eq(comicJobs.status, "processing"),
+          or(isNull(comicJobs.heartbeatAt), lt(comicJobs.heartbeatAt, cutoff)),
+        ),
+      )
+      .returning({ id: comicJobs.id });
+    if (released.length > 0) {
+      console.log(`[worker] Requeued stale job ${job.id} for the next step`);
+    }
   }
 }
 
@@ -211,7 +233,11 @@ async function claimPendingJob(deps: WorkerDeps): Promise<ClaimedJob | null> {
   return rows[0] ?? null;
 }
 
-async function runClaimedJob(deps: WorkerDeps, claimed: ClaimedJob): Promise<void> {
+async function runClaimedJob(
+  deps: WorkerDeps,
+  claimed: ClaimedJob,
+  options?: { maxSteps?: number },
+): Promise<void> {
   if (!isGeneratePayload(claimed.request_payload)) {
     console.error(`[worker] Job ${claimed.id} has no generation payload`);
     await abandonProcessingJob(deps, claimed.id, "Generation request was missing. Please try again.");
@@ -231,13 +257,39 @@ async function runClaimedJob(deps: WorkerDeps, claimed: ClaimedJob): Promise<voi
   }, HEARTBEAT_MS);
 
   try {
-    await deps.processComicJob(claimed.id, claimed.request_payload);
+    await deps.processComicJob(claimed.id, claimed.request_payload, options);
   } catch (error) {
     console.error(`[worker] Job ${claimed.id} crashed:`, error);
     await abandonProcessingJob(deps, claimed.id, "Generation failed. Please try again.");
   } finally {
     clearInterval(beat);
   }
+}
+
+/** One model-backed unit, then return so the invocation stays inside maxDuration. */
+const SERVERLESS_STALE_LIMIT = 5;
+const SERVERLESS_STALE_MS = 75_000;
+
+async function runBoundedServerlessStep(): Promise<void> {
+  const deps = await loadDeps();
+  const ready = await deps.waitForDatabase();
+  if (!ready) {
+    console.error("[worker] Database unavailable.");
+    return;
+  }
+
+  try {
+    await deps.ensureAiSettingsLoaded();
+  } catch (error) {
+    console.error("[worker] Failed to load AI settings:", error);
+    return;
+  }
+
+  await failStaleJobs(deps, SERVERLESS_STALE_LIMIT, SERVERLESS_STALE_MS);
+
+  const claimed = await claimPendingJob(deps);
+  if (!claimed) return;
+  await runClaimedJob(deps, claimed, { maxSteps: 1 });
 }
 
 /** Claim and finish every currently pending job, then return. */
@@ -268,12 +320,12 @@ let activePass: Promise<void> | null = null;
 
 /**
  * Start one worker pass if one is not already running in this instance.
- * On Vercel the pass continues after the HTTP response, up to maxDuration.
- * Concurrent callers cannot claim the same row: the claim uses FOR UPDATE SKIP LOCKED.
+ * On Vercel this claims one job and runs a single generation step.
+ * The CLI process runs each claimed job to completion.
  */
 export function scheduleComicWorker(): void {
   if (activePass) return;
-  const task = drainComicJobs()
+  const task = (process.env.VERCEL ? runBoundedServerlessStep() : drainComicJobs())
     .catch((error) => {
       console.error("[worker] Pass failed:", error);
     })
