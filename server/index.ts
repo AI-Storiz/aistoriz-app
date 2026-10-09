@@ -202,17 +202,16 @@ function serveLandingPage({
 }
 
 function registerLegalPages(app: express.Application) {
-  const templatesDir = path.resolve(process.cwd(), "server", "templates");
   const privacyTemplate = fs.readFileSync(
-    path.join(templatesDir, "privacy.html"),
+    path.join(process.cwd(), "server/templates/privacy.html"),
     "utf-8",
   );
   const accountDeletionTemplate = fs.readFileSync(
-    path.join(templatesDir, "account-deletion.html"),
+    path.join(process.cwd(), "server/templates/account-deletion.html"),
     "utf-8",
   );
   const legalStyles = fs.readFileSync(
-    path.join(templatesDir, "legal-page.css"),
+    path.join(process.cwd(), "server/templates/legal-page.css"),
     "utf-8",
   );
   const appName = getAppName();
@@ -244,13 +243,10 @@ function registerLegalPages(app: express.Application) {
 }
 
 function configureExpoAndLanding(app: express.Application) {
-  const templatePath = path.resolve(
-    process.cwd(),
-    "server",
-    "templates",
-    "landing-page.html",
+  const landingPageTemplate = fs.readFileSync(
+    path.join(process.cwd(), "server/templates/landing-page.html"),
+    "utf-8",
   );
-  const landingPageTemplate = fs.readFileSync(templatePath, "utf-8");
   const appName = getAppName();
 
   log("Serving static Expo files with dynamic manifest routing");
