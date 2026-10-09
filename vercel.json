@@ -1,6 +1,7 @@
 {
   "framework": null,
-  "buildCommand": "node scripts/bundle-vercel-api.mjs",
+  "buildCommand": null,
+  "outputDirectory": null,
   "rewrites": [{ "source": "/(.*)", "destination": "/api" }],
   "functions": {
     "api/index.js": {
