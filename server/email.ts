@@ -1,7 +1,11 @@
 // Email service using Resend API
 import { Resend } from 'resend';
 
-const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || "fiocreativesolutions@gmail.com";
+const configuredFrom = process.env.RESEND_FROM_EMAIL?.trim();
+const FROM_EMAIL =
+  configuredFrom && configuredFrom.toLowerCase() !== "fiocreativesolutions@gmail.com"
+    ? configuredFrom
+    : "noreply@fiocreatives.com";
 
 function getResendClient() {
   const apiKey = process.env.RESEND_API_KEY;
