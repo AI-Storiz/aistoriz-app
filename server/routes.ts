@@ -4623,7 +4623,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         topUp3Price: settings.topUp3Price,
       });
     } catch (error: any) {
-      console.error("Get credit settings error:", error);
+      const code = typeof error?.code === "string" ? error.code : "";
+      const message = String(error?.message ?? error ?? "unknown error")
+        .replace(/postgres(?:ql)?:\/\/\S+/gi, "[redacted-url]")
+        .replace(/(password|user|username)=([^\s&]+)/gi, "$1=[redacted]");
+      console.error(
+        "Get credit settings error:",
+        code ? `${code} ${message}` : message,
+      );
       res.status(500).json({ error: "Failed to get credit settings" });
     }
   });

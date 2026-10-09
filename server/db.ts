@@ -1,6 +1,7 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "../shared/schema";
+import { supabaseRootCa } from "./supabaseRootCa";
 
 const { Pool } = pg;
 
@@ -44,7 +45,14 @@ function buildPoolConfig(): pg.PoolConfig {
       host.includes("pooler.supabase.com");
 
     if (needsSsl) {
-      config.ssl = { rejectUnauthorized: true };
+      const supabaseHost =
+        host.includes("supabase.co") || host.includes("pooler.supabase.com");
+      // Supabase's pooler certificate is signed by Supabase Root 2021 CA,
+      // which is not in Node's trust store. Trust that CA and keep
+      // verification on. Other hosts keep the default public trust store.
+      config.ssl = supabaseHost
+        ? { rejectUnauthorized: true, ca: supabaseRootCa }
+        : { rejectUnauthorized: true };
     }
   } catch {
     // Non-URL connection strings rely on pg defaults.
