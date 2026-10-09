@@ -8,6 +8,11 @@ import * as path from "path";
 import { createProxyMiddleware } from "http-proxy-middleware";
 
 export const app = express();
+if (process.env.VERCEL) {
+  // Trust only Vercel's proxy hop. `true` would accept any X-Forwarded-For
+  // entry and let clients bypass the auth rate limiter.
+  app.set("trust proxy", 1);
+}
 const log = console.log;
 const isDev = process.env.NODE_ENV !== "production";
 

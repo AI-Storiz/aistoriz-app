@@ -327,10 +327,37 @@ export const adImpressionsRelations = relations(adImpressions, ({ one }) => ({
   }),
 }));
 
-export const insertUserSchema = createInsertSchema(users).pick({
-  email: true,
-  password: true,
-});
+// drizzle-zod's generated ZodObject can infer an empty key set, so
+// `.pick({ field: true })` / `.omit({ field: true })` fail with
+// `Type 'true' is not assignable to type 'never'`. The runtime schema
+// still has the columns; select them through this helper instead.
+type InsertZodSchema = {
+  pick: (mask: Record<string, true>) => z.ZodTypeAny;
+  omit: (mask: Record<string, true>) => z.ZodTypeAny;
+};
+
+function insertFieldMask<const K extends readonly string[]>(keys: K): Record<string, true> {
+  return Object.fromEntries(keys.map((key) => [key, true]));
+}
+
+function pickInsertSchema<T extends Record<string, unknown>, const K extends readonly (keyof T & string)[]>(
+  schema: InsertZodSchema,
+  keys: K,
+): z.ZodType<Pick<T, K[number]>> {
+  return schema.pick(insertFieldMask(keys));
+}
+
+function omitInsertSchema<T extends Record<string, unknown>, const K extends readonly (keyof T & string)[]>(
+  schema: InsertZodSchema,
+  keys: K,
+): z.ZodType<Omit<T, K[number]>> {
+  return schema.omit(insertFieldMask(keys));
+}
+
+export const insertUserSchema = pickInsertSchema<typeof users.$inferInsert, ["email", "password"]>(
+  createInsertSchema(users) as InsertZodSchema,
+  ["email", "password"],
+);
 
 export const loginUserSchema = z.object({
   email: z.string().email(),
@@ -347,21 +374,20 @@ export type User = typeof users.$inferSelect;
 export type CreditTransaction = typeof creditTransactions.$inferSelect;
 export type CreditSettings = typeof creditSettings.$inferSelect;
 
-export const insertProjectSchema = createInsertSchema(projects).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
+export const insertProjectSchema = omitInsertSchema<
+  typeof projects.$inferInsert,
+  ["id", "createdAt", "updatedAt"]
+>(createInsertSchema(projects) as InsertZodSchema, ["id", "createdAt", "updatedAt"]);
 
-export const insertCharacterSchema = createInsertSchema(characters).omit({
-  id: true,
-  createdAt: true,
-});
+export const insertCharacterSchema = omitInsertSchema<
+  typeof characters.$inferInsert,
+  ["id", "createdAt"]
+>(createInsertSchema(characters) as InsertZodSchema, ["id", "createdAt"]);
 
-export const insertGeneratedPageSchema = createInsertSchema(generatedPages).omit({
-  id: true,
-  createdAt: true,
-});
+export const insertGeneratedPageSchema = omitInsertSchema<
+  typeof generatedPages.$inferInsert,
+  ["id", "createdAt"]
+>(createInsertSchema(generatedPages) as InsertZodSchema, ["id", "createdAt"]);
 
 export type Project = typeof projects.$inferSelect;
 export type InsertProject = z.infer<typeof insertProjectSchema>;

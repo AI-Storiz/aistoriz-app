@@ -4268,11 +4268,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const token = generateUserToken(user.id);
-      
-      sendVerificationEmail(email, verificationCode, "").catch(err => {
-        console.error("Failed to send verification email:", err);
-      });
-      
+
+      const emailResult = await sendVerificationEmail(email, verificationCode, "");
+      if (!emailResult.success) {
+        console.error("Failed to send verification email:", emailResult.error);
+      }
+
       res.json({
         token,
         user: {
@@ -4535,11 +4536,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
       
       await storage.resendVerificationCode(userId, newCode, expiresAt);
-      
-      sendVerificationEmail(user.email, newCode, "").catch(err => {
-        console.error("Failed to send verification email:", err);
-      });
-      
+
+      const emailResult = await sendVerificationEmail(user.email, newCode, "");
+      if (!emailResult.success) {
+        console.error("Failed to send verification email:", emailResult.error);
+      }
+
       res.json({ success: true, message: "Verification code sent" });
     } catch (error: any) {
       console.error("Resend verification error:", error);
