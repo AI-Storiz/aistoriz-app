@@ -1,13 +1,14 @@
 import { build } from "esbuild";
-import { readFile, rm } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 
 /**
- * Vercel compiles api/index.ts to ESM and keeps extensionless imports.
- * With "type": "module", Node then fails to load ../server/index.
- * Bundle the function so the deployed entry has no relative server import.
+ * Refresh the committed api/index.js bundle in place.
+ * Vercel matches `functions` before `buildCommand`, so this file must already
+ * exist in git. The source lives in api/_handler.ts, which Vercel does not
+ * deploy as its own function.
  */
 await build({
-  entryPoints: ["api/index.ts"],
+  entryPoints: ["api/_handler.ts"],
   outfile: "api/index.js",
   bundle: true,
   platform: "node",
@@ -17,10 +18,6 @@ await build({
 });
 
 const generated = await readFile("api/index.js", "utf8");
-if (/from\s+["'][^"']*server\/index["']/.test(generated) || /\/server\/index["']/.test(generated)) {
+if (/from\s+["'][^"']*server\/index["']/.test(generated)) {
   throw new Error("Vercel API bundle still imports server/index");
-}
-
-if (process.env.VERCEL) {
-  await rm("api/index.ts");
 }

@@ -3,7 +3,6 @@ node_modules/
 
 # Build output (IMPORTANT for your backend)
 server_dist/
-api/index.js
 build/
 out/
 
