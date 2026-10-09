@@ -87,6 +87,14 @@ def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBu
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+// Local release signing is optional. EAS cloud builds do not define the
+// password properties; they inject remote credentials after this file is
+// configured. Reading a missing property fails configuration.
+def releaseKeystoreConfigured = project.hasProperty('MYAPP_RELEASE_STORE_FILE') &&
+    project.hasProperty('MYAPP_RELEASE_STORE_PASSWORD') &&
+    project.hasProperty('MYAPP_RELEASE_KEY_ALIAS') &&
+    project.hasProperty('MYAPP_RELEASE_KEY_PASSWORD')
+
 android {
     ndkVersion rootProject.ext.ndkVersion
 
@@ -111,7 +119,7 @@ android {
             keyPassword 'android'
         }
         release {
-            if (project.hasProperty('MYAPP_RELEASE_STORE_FILE')) {
+            if (releaseKeystoreConfigured) {
                 storeFile file(MYAPP_RELEASE_STORE_FILE)
                 storePassword MYAPP_RELEASE_STORE_PASSWORD
                 keyAlias MYAPP_RELEASE_KEY_ALIAS
@@ -124,7 +132,7 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            signingConfig project.hasProperty('MYAPP_RELEASE_STORE_FILE') ? signingConfigs.release : signingConfigs.debug
+            signingConfig releaseKeystoreConfigured ? signingConfigs.release : signingConfigs.debug
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds

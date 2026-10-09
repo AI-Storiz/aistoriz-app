@@ -25,12 +25,11 @@
       "package": "com.ai.stories.ai",
       "versionCode": 1,
       "permissions": [
-        "android.permission.INTERNET",
-        "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.CAMERA",
-        "android.permission.VIBRATE",
-        "android.permission.RECORD_AUDIO"
+        "INTERNET",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "CAMERA",
+        "VIBRATE"
       ]
     },
     "web": {
@@ -78,10 +77,10 @@
     },
     "extra": {
       "eas": {
-        "projectId": "c4abe5a2-06e0-4bf1-b285-21bc65545b96"
+        "projectId": "7bf43c6b-f0bf-4068-b0b2-6be741707e34"
       },
       "apiUrl": "https://aistoriz-app.vercel.app"
     },
-    "owner": "asdsdasdasdasdasdasdasdsad"
+    "owner": "semwaqass-organization"
   }
 }

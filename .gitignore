@@ -76,3 +76,5 @@ bundletool*.jar
 m7-registration-log.txt
 /tatus
 /powershell
+.vercel
+.env*
