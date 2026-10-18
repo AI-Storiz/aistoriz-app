@@ -1,415 +1,243 @@
-#to start client in web : npx expo start --web
-#to start client : npm run server:dev 
+# AI Storiz
 
-## Creating a signed build (Android)
+AI Storiz is a mobile application that turns story ideas into illustrated comics, manga, and manhwa. Users can create characters, choose art styles, generate stories and images, and manage their generated comics.
 
-**Option 1: EAS Build (recommended)**  
-EAS manages signing for you. On first production build it will create a keystore; store the credentials it prints somewhere safe.
+The project uses Expo and React Native for the mobile app, an Express and TypeScript backend, Supabase for PostgreSQL and file storage, and Vercel for deployment.
 
-```bash
-# Signed APK (e.g. for direct install / testing)
-npx eas build --platform android --profile production
+## Features
 
-# Signed AAB for Play Store
-npx eas build --platform android --profile production-aab
+- AI-assisted story and comic generation
+- Multiple art styles, including Comic, Manga, Manhwa, Anime, Kawaii, Noir, Graphic, and Afro
+- Character creation and reuse
+- Editable comic panels, speech bubbles, narration, and sound effects
+- Comic history and user library
+- Export and sharing features
+- Credit management and generation job tracking
+- Authentication, email verification, and password reset
+- Email and push notifications
+- Subscription and rewarded-ad interfaces
+- Admin panel for application and AI-provider settings
+- Privacy policy, terms, and account-deletion pages
+
+Feature availability may depend on configuration and the status of the relevant external services.
+
+## Technology Stack
+
+| Area | Technology |
+|---|---|
+| Mobile app | Expo, React Native, TypeScript |
+| Navigation and state | React Navigation, Redux Toolkit, React Query |
+| Backend | Node.js, Express, TypeScript |
+| Database | PostgreSQL, Supabase, Drizzle ORM |
+| File storage | Supabase Storage |
+| AI integration | OpenAI and Google Gemini, with provider configuration |
+| Email | Resend |
+| Hosting | Vercel |
+| Mobile builds | Expo Application Services (EAS) |
+| Advertising | Google Mobile Ads |
+
+## Project Structure
+
+```text
+.
+├── api/                 # Vercel API entry points
+├── assets/              # App assets and visual resources
+├── client/              # Expo / React Native application
+│   ├── components/      # Reusable UI components
+│   ├── screens/         # Application screens
+│   ├── navigation/      # Navigation configuration
+│   ├── contexts/        # Shared application contexts
+│   ├── hooks/           # Custom hooks
+│   ├── lib/             # Client utilities and services
+│   └── constants/       # App constants
+├── server/              # Express backend
+│   ├── routes.ts        # API routes
+│   ├── worker.ts        # Background job processing
+│   ├── db.ts            # Database connection
+│   ├── storage.ts       # Data access
+│   ├── comicS3.ts       # Comic file storage integration
+│   ├── email.ts         # Email functionality
+│   └── templates/       # Admin and informational pages
+├── shared/              # Shared types and schemas
+├── scripts/             # Build and maintenance scripts
+├── android/             # Android native project
+├── ios/                 # iOS native project
+├── app.json             # Expo configuration
+├── eas.json             # EAS build profiles
+├── package.json         # Dependencies and scripts
+├── drizzle.config.ts    # Drizzle configuration
+└── vercel.json          # Vercel deployment configuration
 ```
 
-Log in with `npx eas login` if needed. After the first build, credentials are stored in your EAS project.
-
-**Option 2: Local signed build**  
-1. Create a keystore (once):
-
-   ```bash
-   keytool -genkeypair -v -storetype PKCS12 -keystore android/app/storiz-release.keystore -alias storiz -keyalg RSA -keysize 2048 -validity 10000
-   ```
-
-2. Create `android/keystore.properties` (do not commit; add to `.gitignore`):
-
-   ```properties
-   storePassword=YOUR_STORE_PASSWORD
-   keyPassword=YOUR_KEY_PASSWORD
-   keyAlias=storiz
-   storeFile=storiz-release.keystore
-   ```
-
-3. In `android/app/build.gradle`, add a `release` signing config that reads from `keystore.properties` and use it in `buildTypes.release` (see React Native docs: [signed APK](https://reactnative.dev/docs/signed-apk-android)).
-
-4. Build:
-
-   ```bash
-   cd android && ./gradlew assembleRelease
-   # APK: android/app/build/outputs/apk/release/app-release.apk
-   ```
-
-   Or for Play Store: `./gradlew bundleRelease` → `android/app/build/outputs/bundle/release/app-release.aab`.
-
-  The app uses a multi-provider AI system with intelligent fallback
-  mechanism:
-
-  Text Generation (Story Writing)
-  - Primary Provider: Gemini 2.0 Flash (gemini-2.0-flash)
-  - Fallback Options: OpenAI GPT-4o or Replicate Llama 3
-  - API Key: Configured in .ai-settings.json
-  - Used For: Story generation, character detection, outfit analysis
-
-  Image Generation (Comic Panels)
-  - Current Mode: gemini-fullpage (full-page comic generation)
-  - Panel Provider: Gemini 2.5 Flash Image
-  - Alternative Providers:
-    - Replicate (Flux Kontext Dev) - Default enabled
-    - SiliconFlow (Flux Kontext)
-    - Flux2 Pro
-    - OpenAI DALL-E (fallback)
-
-  Comic Generation Workflow
-
-  User Request → Credit Check → Story Generation → Image Generation → Save
-  to DB
-
-  Step-by-Step Process:
-
-  1. User Submits (POST /api/generate-comic)
-    - Story prompt, style, characters, page count
-    - Credit validation (base 50 + 15 per additional page)
-    - Rate limit check (5/hour, 20/day)
-  2. Credits Deducted (BEFORE generation starts)
-    - Prevents abuse
-    - Transaction logged to database
-  3. Story Generation (AI Text)
-    - Gemini 2.0 Flash creates structured JSON story
-    - 5-act narrative arc (Cover → Introduction → Rising Action → Climax →
-  Resolution)
-    - Character consistency enforcement
-    - Dialogue and narration in requested language
-  4. Image Generation (AI Images)
-    - Two modes available:
-        - Gemini Full-Page: Single image per page (faster, cheaper)
-      - Multi-Model: Multiple panels per page (more detailed)
-    - Character reference images used for visual consistency
-    - Style-specific prompts (Comic, Manga, Anime, etc.)
-  5. Job Processing
-    - Async background processing
-    - Progress updates via polling (GET /api/job/:jobId)
-    - Stored in PostgreSQL for persistence
-  6. Result Delivery
-    - Pages with images and dialogue
-    - Auto-saved to user's library
-    - Export to PDF/images available
-
-  ---
-  ✅ What's Complete & Working
-
-  Backend (100% Complete)
-
-  Authentication System ✅
-  - User registration with email verification
-  - JWT-based authentication (30-day tokens)
-  - Password reset flow
-  - Google OAuth ready (needs client IDs)
-  - Admin authentication separate
-
-  Credit System ✅
-  - Credit calculation (base + per-page)
-  - Transaction logging
-  - Watch ads for credits
-  - Subscription plans (weekly/yearly)
-  - Top-up purchases (3 tiers)
-
-  Comic Generation ✅
-  - Full AI integration working
-  - 2 generation modes (Gemini full-page, Multi-model)
-  - Character consistency (upload photos)
-  - Outfit detection from uploaded images
-  - 8 art styles (5 free, 3 premium locked)
-  - Multi-language support
-  - Rate limiting
-  - Audit logging
-
-  User Management ✅
-  - Character library (save/reuse characters)
-  - Comics library (save/edit/export)
-  - Credit transactions history
-  - Subscription management
-
-  Admin Panel ✅
-  - User management (view/edit credits)
-  - System statistics
-  - Art styles management
-  - Credit settings
-  - Rate limit settings
-  - Referral settings
-  - OAuth settings
-  - Advertisement management
-  - Notification settings
-  - Audit logs viewer
-
-  Referral System ✅
-  - Unique referral codes per user
-  - Credit rewards (50 inviter, 25 invitee)
-  - Referral history tracking
-  - Time-limited bounty promotions
-
-  Notification System ✅
-  - Push notifications (Expo)
-  - Email notifications (Resend)
-  - User preferences
-  - Broadcast capability
-  - Notification history
-
-  Internal Ads ✅
-  - Text and banner ads
-  - Impression tracking
-  - Frequency limiting
-  - Subscriber exemption
-
-  Frontend (Mobile App - 100% Complete)
-
-  Screens ✅
-  - AuthScreen (login/register)
-  - CreateScreen (comic creation)
-  - GeneratingScreen (progress tracking)
-  - PreviewScreen (view/edit comic)
-  - HistoryScreen (saved comics)
-  - ProfileScreen (user settings)
-  - SubscriptionScreen
-  - EarnCreditsScreen
-  - StoryHintsScreen
-  - AboutScreen, TermsScreen, PrivacyScreen
-  - Email verification, password reset
-
-  Components ✅
-  - ComicPanel, ComicPanelGrid
-  - SpeechBubble, NarrationBox, SoundEffect
-  - CharacterCard, StyleCard
-  - ExportModal (PDF, images, sharing)
-  - BannerAd, FooterTextAd
-  - Error boundaries
-
-  ---
-  ⚠️ Potential Issues & Missing Features
-
-  1. Environment Variable Exposure 🔴 HIGH PRIORITY
-
-  Issue: .ai-settings.json contains actual API keys and is committed to
-  codebase
-  "apiKey": "sk-proj-IwarcBAnBzKXHn..."  // OpenAI key exposed
-  "apiKey": "r8_FhogO73wmkIohBmkWECRHCDz..."  // Replicate key exposed
-  "geminiApiKey": "AIzaSyA6u19x1HqqhRk0Xz6mymU..."  // Gemini key exposed
-  Fix: Move to environment variables or encrypt the file
-
-  2. Session Secret Hardcoded 🔴 HIGH PRIORITY
-
-  File: server/routes.ts:15
-  const JWT_SECRET = process.env.SESSION_SECRET ||
-  "fallback-jwt-secret-key";
-  Issue: Fallback secret is weak and predictable
-  Fix: Remove fallback, require SESSION_SECRET in production
-
-  3. Admin Password in .env 🟡 MEDIUM
-
-  Issue: Admin password stored in plain text in .env file
-  ADMIN_PASSWORD=@?YesBotEnterx1Box?
-  Fix: Use hashed password or move to database
-
-  4. No Input Validation on Story Prompts 🟡 MEDIUM
-
-  File: server/routes.ts:4996-5006
-  if (!storyPrompt || !style) {
-    return res.status(400).json({ error: "Missing required fields" });
-  }
-  Issue: No length limits, profanity filters, or content moderation
-  Fix: Add input sanitization and validation
-
-  5. Unlimited Image Generation Costs 🟡 MEDIUM
-
-  Issue: User pays credits upfront, but if AI generation fails after 50
-  retries, credits are lost
-  File: server/routes.ts:5080-5083
-  Fix: Implement credit refund on generation failure
-
-  6. No Pagination on User Lists 🟡 MEDIUM
-
-  File: server/routes.ts:4395-4417
-  app.get("/api/admin/users", requireAdminAuth, async (req: Request, res:
-  Response) => {
-    const allUsers = await storage.getAllUsers();  // Loads ALL users
-  Issue: Will slow down with 1000s of users
-  Fix: Add pagination/filtering
-
-  7. Email Verification Not Enforced 🟢 LOW
-
-  Issue: Users can use app features without verifying email
-  Fix: Add requireEmailVerified middleware for critical actions
-
-  8. Missing Rate Limiting on Auth Endpoints 🟡 MEDIUM
-
-  Issue: No rate limiting on /api/auth/login and /api/auth/register
-  Risk: Brute force attacks possible
-  Fix: Add express-rate-limit middleware
-
-  9. Character Image Upload Size Not Limited 🟢 LOW
-
-  Issue: Users can upload huge base64 images
-  Fix: Add file size validation (e.g., max 5MB)
-
-  10. No HTTPS Enforcement 🟡 MEDIUM
-
-  Issue: App allows HTTP connections
-  Fix: Add app.use(enforce.HTTPS()) middleware in production
-
-  ---
-  🐛 Bugs Found
-
-  None Critical ✅
-
-  The codebase is well-structured with no obvious bugs. The implementation
-  is solid.
-
-  Minor Issues:
-  1. Duplicate CreateScreen file: CreateScreen (copy).tsx should be removed
-  2. Console.log statements: Many debug logs should be removed in production
-  3. Deprecated endpoint: /api/generate-comic-sse returns 410 but could be
-  removed entirely
-
-  ---
-  🚀 Missing Implementations
-
-  1. Subscription Payment Integration
-
-  Status: UI complete, payment processing missing
-  Needed: RevenueCat or Stripe integration
-  Files: client/screens/SubscriptionScreen.tsx, server/routes.ts
-
-  2. Google OAuth
-
-  Status: Endpoints ready, client IDs not configured
-  Needed: Set up Google Cloud Console, add client IDs to admin panel
-  File: server/routes.ts:3963-4005
-
-  3. Email Sending Not Tested
-
-  Status: Code complete, Resend API key present
-  Needed: Test email verification, password reset, welcome emails
-  File: server/email.ts
-
-  4. Push Notifications Not Tested
-
-  Status: Backend complete, needs Expo push token testing
-  File: server/notifications.ts
-
-  5. Comic Export Features
-
-  Status: Frontend UI complete, backend exports partial
-  Missing:
-  - PDF generation quality
-  - Watermarking for free users
-  - High-res exports for premium users
-
-  6. Analytics Dashboard
-
-  Status: Basic stats available
-  Missing:
-  - Revenue tracking
-  - Popular styles analytics
-  - User retention metrics
-  - Generation success rates
-
-  7. Content Moderation
-
-  Status: None
-  Needed:
-  - Profanity filter for story prompts
-  - Image content moderation
-  - Inappropriate content detection
-
-  8. Caching
-
-  Status: None
-  Needed:
-  - Redis for job status (currently hits DB every poll)
-  - Art styles caching
-  - Credit settings caching
-
-  ---
-  💡 Code Quality Assessment
-
-  Architecture: ⭐⭐⭐⭐⭐ (Excellent)
-  - Clean separation of concerns
-  - Proper error handling
-  - Type-safe with TypeScript
-  - Database schema well-designed
-
-  Security: ⭐⭐⭐ (Good, needs improvement)
-  - JWT authentication implemented
-  - Password hashing with bcrypt
-  - SQL injection protected (using ORM)
-  - Missing: Rate limiting, HTTPS enforcement, API key encryption
-
-  Performance: ⭐⭐⭐⭐ (Very Good)
-  - Parallel image generation
-  - Background job processing
-  - Database indexes on foreign keys
-  - Missing: Caching layer, pagination
-
-  Maintainability: ⭐⭐⭐⭐⭐ (Excellent)
-  - Well-organized file structure
-  - Comprehensive type definitions
-  - Clear naming conventions
-  - Good comments where needed
-
-  Testing: ⭐ (Missing)
-  - No unit tests
-  - No integration tests
-  - No E2E tests
-
-  ---
-  📋 Recommendations
-
-  Immediate (Before Production)
-
-  1. ✅ Move API keys to environment variables
-  2. ✅ Add rate limiting to auth endpoints
-  3. ✅ Remove API keys from .ai-settings.json
-  4. ✅ Add input validation on all user inputs
-  5. ✅ Implement HTTPS enforcement
-  6. ✅ Add pagination to admin user list
-
-  Short Term
-
-  1. Add unit tests for critical functions
-  2. Implement content moderation
-  3. Add Redis caching for job polling
-  4. Complete payment integration
-  5. Test email and push notifications
-  6. Add error tracking (Sentry/Bugsnag)
-
-  Long Term
-
-  1. Build analytics dashboard
-  2. Add A/B testing for AI prompts
-  3. Implement user feedback system
-  4. Add social sharing features
-  5. Build admin mobile app
-  6. Add multi-language support for UI (currently only comic content)
-
-  ---
-  📊 Final Verdict
-
-  Overall Status: 95% Complete ✅
-
-  The application is production-ready with minor security improvements
-  needed. The AI integration is sophisticated and working well. The codebase
-   is clean, well-architected, and maintainable.
-
-  Strengths:
-  - Comprehensive feature set
-  - Excellent AI integration
-  - Clean architecture
-  - Good error handling
-  - Complete admin panel
-
-  Weaknesses:
-  - Security hardening needed
-  - Missing automated tests
-  - No caching layer
-  - Payment integration incomplete
+## Prerequisites
+
+- Node.js and npm
+- Git
+- Access to the project's Supabase database and Storage
+- Required AI-provider credentials
+- Resend credentials if email delivery is needed
+- An Expo account for EAS builds
+- Android Studio for local Android development; macOS and Xcode for local iOS builds
+
+Use the Node.js version supported by the project's Expo and dependency configuration.
+
+## Installation
+
+Clone the repository and install dependencies:
+
+```bash
+git clone https://github.com/AI-Storiz/aistoriz-app.git
+cd aistoriz-app
+npm install
+```
+
+For work on the development branch, switch to `arslan`:
+
+```bash
+git switch arslan
+```
+
+## Environment Configuration
+
+Create a local `.env` file in the project root. Obtain values from the project owner and the relevant service dashboards.
+
+Common server configuration variables include:
+
+```env
+DATABASE_URL=
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+COMIC_STORAGE_BUCKET=
+GEMINI_API_KEY=
+OPENAI_API_KEY=
+RESEND_API_KEY=
+SESSION_SECRET=
+```
+
+The exact variables required depend on the feature and deployment environment. Check the server configuration before setting up a new environment.
+
+For client builds, configure `EXPO_PUBLIC_API_URL` with the appropriate API base URL. Values prefixed with `EXPO_PUBLIC_` are bundled into the client and must not contain secrets.
+
+**Security requirements**
+
+- Never commit `.env` files, API keys, passwords, service-role keys, or signing credentials.
+- Keep production credentials in the appropriate hosting provider's environment-variable settings.
+- Use a strong, unique session secret.
+- Do not expose Supabase service-role credentials to the mobile client.
+
+## Development
+
+Run the backend:
+
+```bash
+npm run server:dev
+```
+
+Run the Expo development server:
+
+```bash
+npm run expo:dev
+```
+
+Run the background worker when required by the selected local job-processing setup:
+
+```bash
+npm run worker
+```
+
+Use the project's configured environment variables before starting services. The backend and mobile client must point to the intended development API and database.
+
+## Database
+
+The application uses PostgreSQL with Drizzle ORM and Supabase.
+
+To apply the schema, review the target database and configuration first. The project provides:
+
+```bash
+npm run db:push
+```
+
+**Caution:** this command can modify the database schema. Do not run it against production without approval and a verified backup or recovery plan.
+
+## AI Provider Configuration
+
+AI-provider settings are managed through the application's admin configuration and supported server environment variables.
+
+The backend includes provider credential resolution and model configuration for OpenAI and Google Gemini. Keep provider credentials on the server and configure the desired providers using the project's admin settings and deployment environment.
+
+## Vercel Deployment
+
+The repository includes a Vercel configuration and API entry points.
+
+Before deploying:
+
+1. Confirm the intended Git branch and Vercel project.
+2. Configure the required server-side environment variables in Vercel.
+3. Verify the Supabase database and Storage settings.
+4. Confirm that the API base URL used by the mobile app points to the intended deployment.
+5. Test the deployed API and admin functionality.
+6. Build and test the mobile app against the intended API.
+
+Deploy only to the authorized project and branch. Production deployment should follow the project owner's approval process.
+
+## Android Builds
+
+The project defines EAS build scripts for Android preview and production builds.
+
+Preview APK:
+
+```bash
+npm run build:apk
+```
+
+Production Android build:
+
+```bash
+npm run build:apk:release
+```
+
+The production profile's output format and signing configuration depend on `eas.json` and the EAS project configuration. Confirm whether the intended artifact is an APK for direct installation or an AAB for Google Play before release.
+
+Never commit Android keystores, signing passwords, or EAS credentials to the repository.
+
+## Quality Checks
+
+TypeScript check:
+
+```bash
+npm run check:types
+```
+
+Lint:
+
+```bash
+npm run lint
+```
+
+Formatting check:
+
+```bash
+npm run check:format
+```
+
+Run these checks before submitting changes. Run the relevant application and integration tests separately; the presence of a feature or test file does not by itself establish that production behavior has been verified.
+
+## Troubleshooting
+
+- **Database connection errors:** verify `DATABASE_URL`, network access, and database availability.
+- **Storage errors:** verify `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `COMIC_STORAGE_BUCKET`.
+- **AI generation errors:** verify the selected provider, server-side credentials, model configuration, and provider quota.
+- **Mobile API errors:** verify `EXPO_PUBLIC_API_URL` and rebuild the app if its API URL is embedded in the native binary.
+- **Build errors:** confirm the Node.js version, installed dependencies, Expo configuration, and EAS build profile.
+
+## Contributing
+
+- Work on the authorized development branch.
+- Keep changes focused and avoid unrelated modifications.
+- Never commit credentials or sensitive production data.
+- Run applicable quality checks and tests before submitting changes.
+- Obtain approval before merging or deploying to production.
+
+## License
+
+Proprietary. All rights reserved. Unauthorized distribution is prohibited.
