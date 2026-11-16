@@ -2,7 +2,7 @@
 
 export const LEGAL_APP_NAME = "AI Storiz";
 export const LEGAL_DEVELOPER_NAME = "Fio Creatives";
-export const LEGAL_LAST_UPDATED = "June 2026";
+export const LEGAL_LAST_UPDATED = "November 2026";
 
 /** Single support contact for privacy, deletion, and legal inquiries (web + in-app). */
 export const LEGAL_CONTACT_EMAIL = "fiocreativesolutions@gmail.com";

@@ -8388,7 +8388,7 @@ import express from "express";
 // shared/legal.ts
 var LEGAL_APP_NAME = "AI Storiz";
 var LEGAL_DEVELOPER_NAME = "Fio Creatives";
-var LEGAL_LAST_UPDATED = "June 2026";
+var LEGAL_LAST_UPDATED = "November 2026";
 var LEGAL_CONTACT_EMAIL = "fiocreativesolutions@gmail.com";
 var LEGAL_PRIVACY_CONTACT_EMAIL = LEGAL_CONTACT_EMAIL;
 var LEGAL_ACCOUNT_DELETION_EMAIL = LEGAL_CONTACT_EMAIL;
