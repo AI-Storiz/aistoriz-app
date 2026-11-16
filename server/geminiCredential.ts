@@ -1,6 +1,24 @@
 export const GEMINI_TEXT_MODEL = "gemini-3.5-flash";
 export const GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image";
 export const GEMINI_IMAGE_MODALITIES = ["TEXT", "IMAGE"] as const;
+export const DEFAULT_GEMINI_API_BASE = "https://generativelanguage.googleapis.com";
+
+/** Gemini REST origin. Trailing slashes are stripped. Unset/empty uses Google's host. */
+export function geminiApiBase(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+): string {
+  const raw = env.GEMINI_API_BASE;
+  if (typeof raw !== "string" || !raw.trim()) return DEFAULT_GEMINI_API_BASE;
+  return raw.trim().replace(/\/+$/, "");
+}
+
+export function geminiGenerateContentUrl(
+  model: string,
+  apiKey: string,
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+): string {
+  return `${geminiApiBase(env)}/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+}
 
 export const GEMINI_KEY_MISSING_MESSAGE =
   "Gemini API key not configured. Save a Gemini key in Admin Providers, or set GEMINI_API_KEY on the server.";

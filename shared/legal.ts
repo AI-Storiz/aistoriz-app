@@ -11,9 +11,9 @@ export const LEGAL_PRIVACY_CONTACT_EMAIL = LEGAL_CONTACT_EMAIL;
 export const LEGAL_ACCOUNT_DELETION_EMAIL = LEGAL_CONTACT_EMAIL;
 
 export const LEGAL_PRIVACY_POLICY_URL =
-  "https://aistorizapi.fiocreatives.com/privacy";
+  "https://aistoriz-app.vercel.app/privacy";
 export const LEGAL_ACCOUNT_DELETION_URL =
-  "https://aistorizapi.fiocreatives.com/account-deletion";
+  "https://aistoriz-app.vercel.app/account-deletion";
 
 export type LegalSection = {
   title: string;
@@ -37,7 +37,6 @@ export const PRIVACY_POLICY_SECTIONS: LegalSection[] = [
       "User content: story prompts, character names and descriptions, character photos you upload, and AI-generated comic pages and related metadata.",
       "Usage and app data: comics you save, credit balance and transaction history, referral codes, art style preferences, and in-app settings.",
       "Device and technical data: device type, operating system, app version, push notification tokens, and diagnostic logs needed to operate and secure the Service.",
-      "Advertising data: advertising identifiers and interaction data when ads are shown (see Third-Party Services).",
       "Payment-related data: subscription and purchase status processed through Google Play or Apple App Store (we do not receive your full payment card number).",
     ],
   },
@@ -50,7 +49,7 @@ export const PRIVACY_POLICY_SECTIONS: LegalSection[] = [
       "Process credit purchases, subscriptions, referrals, and support requests.",
       "Send service-related emails (verification, password reset) and push notifications you enable.",
       "Improve app performance, fix errors, prevent fraud, and enforce our Terms of Service.",
-      "Display advertisements and measure ad performance where applicable.",
+      "Show Sponsored promotions created by the developer.",
     ],
   },
   {
@@ -61,7 +60,7 @@ export const PRIVACY_POLICY_SECTIONS: LegalSection[] = [
     bullets: [
       "Service providers: cloud hosting, email delivery, and AI image generation partners (including OpenAI and Replicate) that process prompts and content needed to provide the Service, subject to their policies and our instructions.",
       "Payment platforms: Google Play and Apple App Store for in-app purchases and subscriptions.",
-      "Advertising partners: Google AdMob (or similar) for ad delivery and measurement on supported devices.",
+      "The app may show Sponsored promotions created by the developer. These promotions are not served by an advertising network and do not use an advertising identifier.",
       "Legal and safety: when required by law, to protect rights and safety, or to respond to lawful requests from authorities.",
     ],
   },
@@ -72,7 +71,7 @@ export const PRIVACY_POLICY_SECTIONS: LegalSection[] = [
       "You can change many permissions in your device settings. Some features may not work if required permissions are denied.",
     ],
     bullets: [
-      "Photos / camera: to add character images for comic creation.",
+      "Photos: to add character images for comic creation.",
       "Notifications: to send comic-ready alerts and optional promotional messages if enabled.",
       "Network access: to sync your account and generate content.",
     ],

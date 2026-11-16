@@ -2841,6 +2841,15 @@ var init_openaiCredential = __esm({
 });
 
 // server/geminiCredential.ts
+function geminiApiBase(env = process.env) {
+  const raw = env.GEMINI_API_BASE;
+  if (typeof raw !== "string" || !raw.trim())
+    return DEFAULT_GEMINI_API_BASE;
+  return raw.trim().replace(/\/+$/, "");
+}
+function geminiGenerateContentUrl(model, apiKey, env = process.env) {
+  return `${geminiApiBase(env)}/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+}
 function normalizeGeminiKey(apiKey) {
   if (typeof apiKey !== "string")
     return null;
@@ -2873,13 +2882,14 @@ function resolveGeminiImageModel(model) {
     return GEMINI_IMAGE_MODEL;
   return RETIRED_IMAGE_MODELS[value] || value;
 }
-var GEMINI_TEXT_MODEL, GEMINI_IMAGE_MODEL, GEMINI_IMAGE_MODALITIES, GEMINI_KEY_MISSING_MESSAGE, RETIRED_TEXT_MODELS, RETIRED_IMAGE_MODELS;
+var GEMINI_TEXT_MODEL, GEMINI_IMAGE_MODEL, GEMINI_IMAGE_MODALITIES, DEFAULT_GEMINI_API_BASE, GEMINI_KEY_MISSING_MESSAGE, RETIRED_TEXT_MODELS, RETIRED_IMAGE_MODELS;
 var init_geminiCredential = __esm({
   "server/geminiCredential.ts"() {
     "use strict";
     GEMINI_TEXT_MODEL = "gemini-3.5-flash";
     GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image";
     GEMINI_IMAGE_MODALITIES = ["TEXT", "IMAGE"];
+    DEFAULT_GEMINI_API_BASE = "https://generativelanguage.googleapis.com";
     GEMINI_KEY_MISSING_MESSAGE = "Gemini API key not configured. Save a Gemini key in Admin Providers, or set GEMINI_API_KEY on the server.";
     RETIRED_TEXT_MODELS = {
       "gemini-2.0-flash": GEMINI_TEXT_MODEL,
@@ -3362,14 +3372,11 @@ function logGeminiSelection(purpose, model, selected) {
   console.log(`[gemini] ${purpose} provider=gemini source=${selected.source} model=${model}`);
 }
 async function postGemini(purpose, model, apiKey, body) {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    }
-  );
+  const response = await fetch(geminiGenerateContentUrl(model, apiKey), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
   console.log(`[gemini] ${purpose} httpStatus=${response.status}`);
   const raw = await response.text();
   const text2 = raw.split(apiKey).join("[redacted]");
@@ -6912,38 +6919,10 @@ async function registerRoutes(app2) {
       res.status(500).json({ error: "Failed to update credit settings" });
     }
   });
-  app2.post("/api/credits/watch-ad", requireUserAuth, async (req, res) => {
-    try {
-      const userId = req.userId;
-      const user = await storage.getUser(userId);
-      if (!user) {
-        return res.status(404).json({ error: "User not found" });
-      }
-      const settings = await storage.getCreditSettings();
-      const today = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
-      const lastAdDate = user.lastAdWatchDate ? String(user.lastAdWatchDate).split("T")[0] : null;
-      const adsWatched = lastAdDate === today ? user.adsWatchedToday : 0;
-      if (adsWatched >= settings.maxAdsPerDay) {
-        return res.status(400).json({
-          error: "Daily ad limit reached",
-          adsWatchedToday: adsWatched,
-          maxAdsPerDay: settings.maxAdsPerDay
-        });
-      }
-      await storage.incrementAdsWatched(userId);
-      const updatedUser = await storage.updateUserCredits(userId, settings.adsCreditsReward);
-      await storage.recordTransaction(userId, settings.adsCreditsReward, "ad_reward", "Watched video ad");
-      res.json({
-        success: true,
-        creditsEarned: settings.adsCreditsReward,
-        newBalance: updatedUser?.credits || 0,
-        adsWatchedToday: adsWatched + 1,
-        adsRemaining: settings.maxAdsPerDay - (adsWatched + 1)
-      });
-    } catch (error) {
-      console.error("Watch ad error:", error);
-      res.status(500).json({ error: "Failed to process ad reward" });
-    }
+  app2.post("/api/credits/watch-ad", requireUserAuth, async (_req, res) => {
+    res.status(410).json({
+      error: "Ad rewards are not available in this version."
+    });
   });
   app2.post("/api/webhooks/revenuecat", async (req, res) => {
     try {
@@ -8413,7 +8392,7 @@ var LEGAL_LAST_UPDATED = "June 2026";
 var LEGAL_CONTACT_EMAIL = "fiocreativesolutions@gmail.com";
 var LEGAL_PRIVACY_CONTACT_EMAIL = LEGAL_CONTACT_EMAIL;
 var LEGAL_ACCOUNT_DELETION_EMAIL = LEGAL_CONTACT_EMAIL;
-var LEGAL_ACCOUNT_DELETION_URL = "https://aistorizapi.fiocreatives.com/account-deletion";
+var LEGAL_ACCOUNT_DELETION_URL = "https://aistoriz-app.vercel.app/account-deletion";
 var PRIVACY_POLICY_SECTIONS = [
   {
     title: "Introduction",
@@ -8430,7 +8409,6 @@ var PRIVACY_POLICY_SECTIONS = [
       "User content: story prompts, character names and descriptions, character photos you upload, and AI-generated comic pages and related metadata.",
       "Usage and app data: comics you save, credit balance and transaction history, referral codes, art style preferences, and in-app settings.",
       "Device and technical data: device type, operating system, app version, push notification tokens, and diagnostic logs needed to operate and secure the Service.",
-      "Advertising data: advertising identifiers and interaction data when ads are shown (see Third-Party Services).",
       "Payment-related data: subscription and purchase status processed through Google Play or Apple App Store (we do not receive your full payment card number)."
     ]
   },
@@ -8443,7 +8421,7 @@ var PRIVACY_POLICY_SECTIONS = [
       "Process credit purchases, subscriptions, referrals, and support requests.",
       "Send service-related emails (verification, password reset) and push notifications you enable.",
       "Improve app performance, fix errors, prevent fraud, and enforce our Terms of Service.",
-      "Display advertisements and measure ad performance where applicable."
+      "Show Sponsored promotions created by the developer."
     ]
   },
   {
@@ -8454,7 +8432,7 @@ var PRIVACY_POLICY_SECTIONS = [
     bullets: [
       "Service providers: cloud hosting, email delivery, and AI image generation partners (including OpenAI and Replicate) that process prompts and content needed to provide the Service, subject to their policies and our instructions.",
       "Payment platforms: Google Play and Apple App Store for in-app purchases and subscriptions.",
-      "Advertising partners: Google AdMob (or similar) for ad delivery and measurement on supported devices.",
+      "The app may show Sponsored promotions created by the developer. These promotions are not served by an advertising network and do not use an advertising identifier.",
       "Legal and safety: when required by law, to protect rights and safety, or to respond to lawful requests from authorities."
     ]
   },
@@ -8465,7 +8443,7 @@ var PRIVACY_POLICY_SECTIONS = [
       "You can change many permissions in your device settings. Some features may not work if required permissions are denied."
     ],
     bullets: [
-      "Photos / camera: to add character images for comic creation.",
+      "Photos: to add character images for comic creation.",
       "Notifications: to send comic-ready alerts and optional promotional messages if enabled.",
       "Network access: to sync your account and generate content."
     ]

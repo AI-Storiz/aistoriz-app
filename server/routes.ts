@@ -40,6 +40,7 @@ import {
   GEMINI_IMAGE_MODEL,
   GEMINI_IMAGE_MODALITIES,
   GEMINI_TEXT_MODEL,
+  geminiGenerateContentUrl,
   normalizeGeminiKey,
   resolveGeminiImageModel,
   resolveGeminiTextModel,
@@ -655,14 +656,11 @@ async function postGemini(
   apiKey: string,
   body: unknown,
 ): Promise<{ status: number; ok: boolean; json: any }> {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    },
-  );
+  const response = await fetch(geminiGenerateContentUrl(model, apiKey), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
   console.log(`[gemini] ${purpose} httpStatus=${response.status}`);
   const raw = await response.text();
   const text = raw.split(apiKey).join("[redacted]");
@@ -5016,44 +5014,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Watch Ad for Credits
-  app.post("/api/credits/watch-ad", requireUserAuth, async (req: Request, res: Response) => {
-    try {
-      const userId = (req as any).userId;
-      const user = await storage.getUser(userId);
-      
-      if (!user) {
-        return res.status(404).json({ error: "User not found" });
-      }
-      
-      const settings = await storage.getCreditSettings();
-      const today = new Date().toISOString().split('T')[0];
-      const lastAdDate = user.lastAdWatchDate ? String(user.lastAdWatchDate).split('T')[0] : null;
-      const adsWatched = lastAdDate === today ? user.adsWatchedToday : 0;
-      
-      if (adsWatched >= settings.maxAdsPerDay) {
-        return res.status(400).json({ 
-          error: "Daily ad limit reached",
-          adsWatchedToday: adsWatched,
-          maxAdsPerDay: settings.maxAdsPerDay
-        });
-      }
-      
-      await storage.incrementAdsWatched(userId);
-      const updatedUser = await storage.updateUserCredits(userId, settings.adsCreditsReward);
-      await storage.recordTransaction(userId, settings.adsCreditsReward, "ad_reward", "Watched video ad");
-      
-      res.json({
-        success: true,
-        creditsEarned: settings.adsCreditsReward,
-        newBalance: updatedUser?.credits || 0,
-        adsWatchedToday: adsWatched + 1,
-        adsRemaining: settings.maxAdsPerDay - (adsWatched + 1)
-      });
-    } catch (error: any) {
-      console.error("Watch ad error:", error);
-      res.status(500).json({ error: "Failed to process ad reward" });
-    }
+  // Watch Ad for Credits. Version 1 does not grant credits. The route and
+  // ads_watched_today / ads_credits_reward columns stay for Version 2.
+  app.post("/api/credits/watch-ad", requireUserAuth, async (_req: Request, res: Response) => {
+    res.status(410).json({
+      error: "Ad rewards are not available in this version.",
+    });
   });
 
   // Subscription webhook (for RevenueCat)
