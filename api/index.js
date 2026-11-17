@@ -675,25 +675,63 @@ function stripNonAssetImagesFromComicPagesJson(pages) {
     return p;
   });
 }
+function normalizeCharacterPhotoInput(imageData) {
+  let t = (imageData ?? "").trim().replace(/^\uFEFF/, "");
+  if (t.length >= 2) {
+    const quote = t[0];
+    if ((quote === '"' || quote === "'") && t.endsWith(quote)) {
+      t = t.slice(1, -1).trim();
+    }
+  }
+  return t;
+}
+function characterPhotoAction(imageData, isOwnAsset) {
+  const t = normalizeCharacterPhotoInput(imageData);
+  if (t.length === 0) return "empty";
+  if (t.startsWith("data:")) return "upload-data";
+  if (/^https?:\/\//i.test(t)) return isOwnAsset(t) ? "keep" : "upload-remote";
+  const compact = t.replace(/\s/g, "");
+  if (compact.length >= 64 && /^[A-Za-z0-9+/]+={0,2}$/.test(compact)) return "upload-base64";
+  return "invalid";
+}
+function bufferFromRawBase64Image(value) {
+  const compact = value.replace(/\s/g, "");
+  if (!compact) return null;
+  const buffer = Buffer.from(compact, "base64");
+  if (buffer.length < 12) return null;
+  let contentType = null;
+  if (buffer[0] === 255 && buffer[1] === 216 && buffer[2] === 255) contentType = "image/jpeg";
+  else if (buffer[0] === 137 && buffer[1] === 80 && buffer[2] === 78 && buffer[3] === 71) contentType = "image/png";
+  else if (buffer[0] === 71 && buffer[1] === 73 && buffer[2] === 70 && buffer[3] === 56) contentType = "image/gif";
+  else if (buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP") {
+    contentType = "image/webp";
+  }
+  if (!contentType) return null;
+  return { buffer, contentType, ext: extFromContentType(contentType, "png") };
+}
 async function uploadCharacterPhotoToS3OrThrow(userId, imageData) {
-  assertComicS3Configured();
-  const t = (imageData ?? "").trim();
-  if (t.length === 0) {
+  const t = normalizeCharacterPhotoInput(imageData);
+  const action = characterPhotoAction(t, (url) => isOnOurStorageHttps(url) || isComicAssetUrl(url));
+  if (action === "empty") {
     return "";
   }
-  if (isOnOurStorageHttps(t)) {
+  if (action === "keep") {
     return t;
   }
+  if (action === "invalid") {
+    throw new ComicS3Error("Invalid character photo: expected data or http(s) URL", "INGEST_FAILED");
+  }
+  assertComicS3Configured();
   const subPath = `photo-${randomBytes(10).toString("hex")}`;
   let body;
   let contentType;
   let ext;
-  if (t.startsWith("data:")) {
+  if (action === "upload-data") {
     const decoded = bufferFromDataUri(t);
     body = decoded.buffer;
     contentType = decoded.contentType;
     ext = decoded.ext;
-  } else if (t.startsWith("https://") || t.startsWith("http://")) {
+  } else if (action === "upload-remote") {
     const res = await fetch(t, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     if (!res.ok) {
       throw new ComicS3Error(
@@ -705,7 +743,13 @@ async function uploadCharacterPhotoToS3OrThrow(userId, imageData) {
     contentType = res.headers.get("content-type") || "image/png";
     ext = extFromContentType(contentType, "png");
   } else {
-    throw new ComicS3Error("Invalid character photo: expected data or http(s) URL", "INGEST_FAILED");
+    const decoded = bufferFromRawBase64Image(t);
+    if (!decoded) {
+      throw new ComicS3Error("Invalid character photo: expected data or http(s) URL", "INGEST_FAILED");
+    }
+    body = decoded.buffer;
+    contentType = decoded.contentType;
+    ext = decoded.ext;
   }
   if (body.length === 0) {
     throw new ComicS3Error("Empty character photo body", "INGEST_FAILED");
@@ -1536,6 +1580,21 @@ var init_storage = __esm({
       async deleteUserComic(id, userId) {
         const result = await db.delete(userComics).where(and(eq(userComics.id, id), eq(userComics.userId, userId))).returning();
         return result.length > 0;
+      }
+      async deleteSavedHistory(userId) {
+        const rows = await db.select({
+          id: userComics.id,
+          userId: userComics.userId,
+          isDraft: userComics.isDraft
+        }).from(userComics).where(eq(userComics.userId, userId));
+        const ids = rows.filter((row) => row.userId === userId && row.isDraft === false).map((row) => row.id);
+        if (ids.length === 0) return 0;
+        let deleted = 0;
+        for (const id of ids) {
+          const result = await db.delete(userComics).where(and(eq(userComics.id, id), eq(userComics.userId, userId))).returning({ id: userComics.id });
+          deleted += result.length;
+        }
+        return deleted;
       }
       // Rate Limit Settings
       async getRateLimitSettings() {
@@ -3034,7 +3093,26 @@ async function ensureLibraryComicDraftForJob(job, params) {
   });
   job.libraryComicId = row.id;
 }
+function firstStoredComicImage(page) {
+  if (!page || typeof page !== "object") return "";
+  const direct = (typeof page.imageUrl === "string" ? page.imageUrl.trim() : "") || (typeof page.imageUri === "string" ? page.imageUri.trim() : "");
+  if (direct) return direct;
+  const panels = Array.isArray(page.panelImages) ? page.panelImages : [];
+  const panel = panels.find((url) => typeof url === "string" && url.trim());
+  return panel ? panel.trim() : "";
+}
+function pagesForRequestedCount(pages, requestedCount) {
+  if (requestedCount !== 1) return pages;
+  const source = pages.find((page) => firstStoredComicImage(page)) ?? pages[0];
+  if (!source) return [];
+  const image = firstStoredComicImage(source);
+  if (!image) return [source];
+  return [{ ...source, imageUrl: image, imageUri: "", panelImages: [image] }];
+}
 async function syncJobPagesToS3Library(job, opts) {
+  if (job.pagesCount === 1 && Array.isArray(job.pages)) {
+    job.pages = pagesForRequestedCount(job.pages, 1);
+  }
   if (!job.userId || job.libraryComicId == null) {
     return;
   }
@@ -3650,6 +3728,7 @@ async function getJobFromDb(jobId) {
         pages: stripNonAssetImagesFromComicPagesJson(dbJob.pages || []),
         error: dbJob.error || void 0,
         libraryComicId: dbJob.libraryComicId ?? void 0,
+        savedToLibrary: dbJob.status === "completed" && dbJob.libraryComicId != null,
         requestPayload: dbJob.requestPayload ?? void 0,
         createdAt: new Date(dbJob.createdAt).getTime()
       };
@@ -7705,6 +7784,16 @@ async function registerRoutes(app2) {
       }
       console.error("Update comic error:", error);
       res.status(500).json({ error: "Failed to update comic" });
+    }
+  });
+  app2.delete("/api/comics", requireUserAuth, async (req, res) => {
+    try {
+      const userId = req.userId;
+      const deleted = await storage.deleteSavedHistory(userId);
+      res.json({ success: true, deleted });
+    } catch (error) {
+      console.error("Clear history error:", error);
+      res.status(500).json({ error: "Failed to clear history" });
     }
   });
   app2.delete("/api/comics/:id", requireUserAuth, async (req, res) => {

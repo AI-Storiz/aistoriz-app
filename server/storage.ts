@@ -1,6 +1,7 @@
 import { users, creditTransactions, creditSettings, userCharacters, userComics, rateLimitSettings, oauthSettings, generationAuditLogs, referralSettings, referralBounties, referralHistory, internalAds, adImpressions, adSettings, artStyles, artStyleSettings, userUnlockedStyles, pushTokens, notificationPreferences, notificationHistory, notificationSettings, type User, type InsertUser, type CreditTransaction, type CreditSettings, type UserCharacter, type UserComic, type RateLimitSettings, type OAuthSettings, type GenerationAuditLog, type ReferralSettings, type ReferralBounty, type ReferralHistory, type InternalAd, type AdImpression, type AdSettings, type ArtStyle, type ArtStyleSettings, type UserUnlockedStyle, type PushToken, type NotificationPreference, type NotificationHistoryEntry, type NotificationSettings } from "../shared/schema";
 import { db } from "./db";
-import { eq, sql, and, desc, gte, ne } from "drizzle-orm";
+import { eq, sql, and, desc, gte, ne, inArray } from "drizzle-orm";
+import { savedHistoryDeleteMatch } from "../shared/historyClear";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { normalizeComicPagesOrder, stripNonAssetImagesFromComicPagesJson, assertPersistedComicPagesAreAssetUrlsOnly } from "./comicS3";
@@ -688,6 +689,27 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(userComics.id, id), eq(userComics.userId, userId)))
       .returning();
     return result.length > 0;
+  }
+
+  /** Deletes published History comics for this user. Drafts, characters, and other users stay. */
+  async deleteSavedHistory(userId: string): Promise<number> {
+    const rows = await db
+      .select({
+        id: userComics.id,
+        userId: userComics.userId,
+        isDraft: userComics.isDraft,
+      })
+      .from(userComics)
+      .where(eq(userComics.userId, userId));
+    const ids = rows
+      .filter((row) => savedHistoryDeleteMatch(row.userId, row.isDraft, userId))
+      .map((row) => row.id);
+    if (ids.length === 0) return 0;
+    const deleted = await db
+      .delete(userComics)
+      .where(and(eq(userComics.userId, userId), inArray(userComics.id, ids)))
+      .returning({ id: userComics.id });
+    return deleted.length;
   }
 
   // Rate Limit Settings

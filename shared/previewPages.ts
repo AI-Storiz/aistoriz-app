@@ -21,3 +21,37 @@ export function dedupeIdenticalPreviewPages<T extends { imageUrl?: string; panel
   }
   return out;
 }
+
+type StoredComicPage = {
+  imageUrl?: string;
+  imageUri?: string;
+  panelImages?: string[];
+};
+
+function firstStoredImage(page: StoredComicPage): string {
+  const direct = page.imageUrl?.trim() || page.imageUri?.trim() || "";
+  if (direct) return direct;
+  const panel = (page.panelImages || []).find((url) => typeof url === "string" && url.trim());
+  return panel?.trim() || "";
+}
+
+/**
+ * A one-page comic is one stored image. Extra pages and repeated panel copies
+ * are dropped here, before the row is written. Multi-page comics are unchanged.
+ */
+export function pagesForRequestedCount<T extends StoredComicPage>(
+  pages: T[],
+  requestedCount: number | null | undefined,
+): T[] {
+  if (requestedCount !== 1) return pages;
+  const source = pages.find((page) => firstStoredImage(page)) ?? pages[0];
+  if (!source) return [];
+  const image = firstStoredImage(source);
+  if (!image) return [source];
+  return [{
+    ...source,
+    imageUrl: image,
+    imageUri: "",
+    panelImages: [image],
+  }];
+}

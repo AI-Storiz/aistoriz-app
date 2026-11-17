@@ -1,6 +1,7 @@
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
 
 import { getApiUrl } from "@/lib/query-client";
+import { shouldApplyHistoryFetch } from "@shared/historyClear";
 
 export interface SavedComicLightweight {
   id: string;
@@ -19,6 +20,8 @@ interface HistoryState {
   silentInFlight: number;
   fullInFlight: number;
   lastFetchError: string | null;
+  /** Bumped by Clear History so an in-flight fetch cannot restore deleted comics. */
+  revision: number;
 }
 
 const initialState: HistoryState = {
@@ -26,13 +29,20 @@ const initialState: HistoryState = {
   silentInFlight: 0,
   fullInFlight: 0,
   lastFetchError: null,
+  revision: 0,
+};
+
+type HistoryFetchResult = {
+  comics: SavedComicLightweight[];
+  revision: number;
 };
 
 export const fetchHistory = createAsyncThunk<
-  SavedComicLightweight[],
+  HistoryFetchResult,
   { token: string; mode: HistoryFetchMode },
-  { rejectValue: string }
->("history/fetchHistory", async ({ token, mode }, { rejectWithValue }) => {
+  { rejectValue: string; state: { history: HistoryState } }
+>("history/fetchHistory", async ({ token, mode }, { rejectWithValue, getState }) => {
+  const revision = getState().history.revision;
   try {
     const response = await fetch(new URL("/api/comics", getApiUrl()).toString(), {
       headers: {
@@ -63,7 +73,7 @@ export const fetchHistory = createAsyncThunk<
         thumbnailUrl: directThumb ?? thumb.toString(),
       };
     });
-    return mappedComics;
+    return { comics: mappedComics, revision };
   } catch (e) {
     const message = e instanceof Error ? e.message : "Network error";
     return rejectWithValue(message);
@@ -74,7 +84,13 @@ const historySlice = createSlice({
   name: "history",
   initialState,
   reducers: {
-    clearHistory: () => ({ ...initialState }),
+    clearHistory: (state) => {
+      state.comics = [];
+      state.silentInFlight = 0;
+      state.fullInFlight = 0;
+      state.lastFetchError = null;
+      state.revision += 1;
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -92,8 +108,10 @@ const historySlice = createSlice({
         } else {
           state.fullInFlight = Math.max(0, state.fullInFlight - 1);
         }
-        state.comics = action.payload;
-        state.lastFetchError = null;
+        if (shouldApplyHistoryFetch(state.revision, action.payload.revision)) {
+          state.comics = action.payload.comics;
+          state.lastFetchError = null;
+        }
       })
       .addCase(fetchHistory.rejected, (state, action) => {
         if (action.meta.arg.mode === "silent") {

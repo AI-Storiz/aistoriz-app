@@ -39,6 +39,7 @@ export default function AddCharacterScreen() {
   const { token } = useAuth();
 
   const [imageUri, setImageUri] = useState<string | null>(null);
+  const [pickedBase64, setPickedBase64] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [gender, setGender] = useState<string | null>(null);
   const [description, setDescription] = useState("");
@@ -70,7 +71,7 @@ export default function AddCharacterScreen() {
         </HeaderButton>
       ),
     });
-  }, [navigation, name, gender, imageUri]);
+  }, [navigation, name, gender, imageUri, pickedBase64]);
 
   const handlePickImage = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -88,37 +89,58 @@ export default function AddCharacterScreen() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       allowsEditing: false,
-      quality: 0.8,
+      quality: 0.5,
+      base64: true,
       selectionLimit: 1,
     });
 
     if (!result.canceled && result.assets[0]) {
       setImageUri(result.assets[0].uri);
+      setPickedBase64(result.assets[0].base64 ?? null);
     }
   };
 
-  const uploadCharacterPhoto = async (localUri: string): Promise<string> => {
-    const manipulated = await ImageManipulator.manipulateAsync(
-      localUri,
-      [{ resize: { width: 1024 } }],
-      { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG },
-    );
-    const base64 = await readAsStringAsync(manipulated.uri, {
-      encoding: EncodingType.Base64,
-    });
+  const uploadCharacterPhoto = async (
+    localUri: string,
+    inlineBase64: string | null,
+  ): Promise<string> => {
+    // Android returns content:// or file://. The API only accepts a data URI or http(s) URL.
+    let dataUri: string | null =
+      inlineBase64 && inlineBase64.trim()
+        ? `data:image/jpeg;base64,${inlineBase64.trim()}`
+        : null;
+    try {
+      const manipulated = await ImageManipulator.manipulateAsync(
+        localUri,
+        [{ resize: { width: 1024 } }],
+        { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG },
+      );
+      const base64 = await readAsStringAsync(manipulated.uri, {
+        encoding: EncodingType.Base64,
+      });
+      if (base64.trim()) {
+        dataUri = `data:image/jpeg;base64,${base64.trim()}`;
+      }
+    } catch (error) {
+      if (!dataUri) throw error;
+    }
+    if (!dataUri?.startsWith("data:")) {
+      throw new Error("Could not read the selected photo");
+    }
     const response = await fetch(new URL("/api/character-photos", getApiUrl()).toString(), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ photoUri: `data:image/jpeg;base64,${base64}` }),
+      body: JSON.stringify({ photoUri: dataUri }),
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok || typeof payload.url !== "string" || !payload.url.trim()) {
+    const hosted = typeof payload.url === "string" ? payload.url.trim() : "";
+    if (!response.ok || !/^https?:\/\//i.test(hosted)) {
       throw new Error(payload.error || "Failed to upload character photo");
     }
-    return payload.url.trim();
+    return hosted;
   };
 
   const handleSave = async () => {
@@ -140,7 +162,7 @@ export default function AddCharacterScreen() {
         photoUri =
           imageUri.startsWith("https://") || imageUri.startsWith("http://")
             ? imageUri
-            : await uploadCharacterPhoto(imageUri);
+            : await uploadCharacterPhoto(imageUri, pickedBase64);
       }
 
       const response = await fetch(new URL("/api/characters", getApiUrl()).toString(), {

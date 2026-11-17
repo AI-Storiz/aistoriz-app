@@ -26,6 +26,7 @@ import { db, waitForDatabase } from "./db";
 import { scheduleComicWorker } from "./worker";
 import { aiSettings as aiSettingsTable, comicJobs, creditTransactions } from "../shared/schema";
 import { comicCreditCost, parseComicPageCount } from "../shared/creditCost";
+import { pagesForRequestedCount } from "../shared/previewPages";
 import { sendVerificationEmail, sendPasswordResetEmail, sendWelcomeEmail } from "./email";
 import { sendPushNotification, sendBroadcastNotification, sendComicCompleteNotification, sendReferralSuccessNotification } from "./notifications";
 import { requeuePayloadAfterStall } from "./comicJobStall";
@@ -197,6 +198,9 @@ async function ensureLibraryComicDraftForJob(
 
 /** Uploads any inline or external image URLs in `job.pages` to S3, updates the draft library row, replaces `job.pages` with HTTPS asset URLs. */
 async function syncJobPagesToS3Library(job: ComicJob, opts?: { publish?: boolean }): Promise<void> {
+  if (job.pagesCount === 1 && Array.isArray(job.pages)) {
+    job.pages = pagesForRequestedCount(job.pages, 1) as ComicPage[];
+  }
   if (!job.userId || job.libraryComicId == null) {
     return;
   }
@@ -5970,6 +5974,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       console.error("Update comic error:", error);
       res.status(500).json({ error: "Failed to update comic" });
+    }
+  });
+
+  // Clear History: published comics for this user only.
+  app.delete("/api/comics", requireUserAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req as any).userId;
+      const deleted = await storage.deleteSavedHistory(userId);
+      res.json({ success: true, deleted });
+    } catch (error: any) {
+      console.error("Clear history error:", error);
+      res.status(500).json({ error: "Failed to clear history" });
     }
   });
 

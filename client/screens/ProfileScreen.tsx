@@ -30,6 +30,9 @@ import { apiRequest } from "@/lib/query-client";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 
 import { useAuth } from "@/contexts/AuthContext";
+import { getApiUrl } from "@/lib/query-client";
+import { clearHistory } from "@/store";
+import { useAppDispatch } from "@/store/hooks";
 import type { RootStackParamList } from "@/navigation/RootStackNavigator";
 import { SUPPORT_EMAIL, INVITE_MESSAGE } from "@/constants/appLinks";
 
@@ -103,7 +106,8 @@ export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
   const navigation = useNavigation<NavigationProp>();
-  const { user, logout, refreshUser } = useAuth();
+  const { user, token, logout, refreshUser } = useAuth();
+  const dispatch = useAppDispatch();
 
   const [hdQuality, setHdQuality] = useState(false);
   const queryClient = useQueryClient();
@@ -234,8 +238,26 @@ export default function ProfileScreen() {
           style: "destructive",
           onPress: async () => {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-            await AsyncStorage.removeItem(getStorageKey());
-            Alert.alert("Done", "Your comic history has been cleared.");
+            if (!token) {
+              Alert.alert("Error", "Please log in again, then clear history.");
+              return;
+            }
+            try {
+              const response = await fetch(new URL("/api/comics", getApiUrl()).toString(), {
+                method: "DELETE",
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              const payload = await response.json().catch(() => ({}));
+              if (!response.ok) {
+                throw new Error(payload.error || "Failed to clear history");
+              }
+              dispatch(clearHistory());
+              await AsyncStorage.removeItem(getStorageKey());
+              Alert.alert("Done", "Your comic history has been cleared.");
+            } catch (error) {
+              console.error("Clear history error:", error);
+              Alert.alert("Error", "Could not clear history. Please try again.");
+            }
           },
         },
       ]

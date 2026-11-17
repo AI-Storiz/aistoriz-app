@@ -618,12 +618,14 @@ export default function GeneratingScreen() {
         const comicTitle = job.title || route.params.title || "My Comic";
 
         // Check if server already auto-saved this comic
+        const libraryComicId = Number(job.libraryComicId);
         const serverSaved =
-          job.savedToLibrary === true || typeof job.libraryComicId === "number";
+          job.savedToLibrary === true ||
+          (Number.isInteger(libraryComicId) && libraryComicId > 0);
         devLog(`Comic completion - server saved: ${serverSaved}`);
 
         let comicIdForPreviewUrls: number | undefined =
-          typeof job.libraryComicId === "number" ? job.libraryComicId : undefined;
+          Number.isInteger(libraryComicId) && libraryComicId > 0 ? libraryComicId : undefined;
 
         // Only client-side save if server didn't already save (fallback — server ingests to S3)
         if (token && !serverSaved) {

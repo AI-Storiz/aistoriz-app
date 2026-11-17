@@ -1,5 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { classifyCharacterPhotoInput } from "../shared/characterPhoto";
+import {
+  characterPhotoAction,
+  normalizeCharacterPhotoInput,
+} from "../shared/characterPhoto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import pLimit from "p-limit";
 
@@ -200,15 +203,23 @@ export function stripNonAssetImagesFromComicPagesJson(pages: unknown): unknown[]
  * Returns a public asset URL, or `""` for empty input. Existing app asset URLs are returned unchanged.
  */
 export async function uploadCharacterPhotoToS3OrThrow(userId: string, imageData: string): Promise<string> {
-  assertComicS3Configured();
-  const t = (imageData ?? "").trim();
-  const kind = classifyCharacterPhotoInput(t);
-  if (kind === "empty") {
+  const t = normalizeCharacterPhotoInput(imageData);
+  const action = characterPhotoAction(
+    t,
+    (url) => isOnOurStorageHttps(url) || isComicAssetUrl(url),
+  );
+  if (action === "empty") {
     return "";
   }
-  if (isOnOurStorageHttps(t)) {
+  // Already stored on this app's bucket or CDN. Do not fetch or upload it again.
+  if (action === "keep") {
     return t;
   }
+  if (action === "invalid") {
+    throw new ComicS3Error("Invalid character photo: expected data or http(s) URL", "INGEST_FAILED");
+  }
+
+  assertComicS3Configured();
 
   const subPath = `photo-${randomBytes(10).toString("hex")}`;
 
@@ -216,12 +227,12 @@ export async function uploadCharacterPhotoToS3OrThrow(userId: string, imageData:
   let contentType: string;
   let ext: string;
 
-  if (kind === "data") {
+  if (action === "upload-data") {
     const decoded = bufferFromDataUri(t);
     body = decoded.buffer;
     contentType = decoded.contentType;
     ext = decoded.ext;
-  } else if (kind === "remote") {
+  } else if (action === "upload-remote") {
     const res = await fetch(t, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     if (!res.ok) {
       throw new ComicS3Error(
@@ -233,7 +244,13 @@ export async function uploadCharacterPhotoToS3OrThrow(userId: string, imageData:
     contentType = res.headers.get("content-type") || "image/png";
     ext = extFromContentType(contentType, "png");
   } else {
-    throw new ComicS3Error("Invalid character photo: expected data or http(s) URL", "INGEST_FAILED");
+    const decoded = bufferFromRawBase64Image(t);
+    if (!decoded) {
+      throw new ComicS3Error("Invalid character photo: expected data or http(s) URL", "INGEST_FAILED");
+    }
+    body = decoded.buffer;
+    contentType = decoded.contentType;
+    ext = decoded.ext;
   }
 
   if (body.length === 0) {
@@ -303,6 +320,30 @@ function extFromContentType(contentType: string | undefined, fallback: string): 
   if (c === "image/webp") return "webp";
   if (c === "image/gif") return "gif";
   return fallback;
+}
+
+/** JPEG/PNG/GIF/WebP payload with no `data:` prefix. Returns null when the bytes are not an image. */
+export function bufferFromRawBase64Image(
+  value: string,
+): { buffer: Buffer; contentType: string; ext: string } | null {
+  const compact = value.replace(/\s/g, "");
+  if (!compact) return null;
+  const buffer = Buffer.from(compact, "base64");
+  if (buffer.length < 12) return null;
+  let contentType: string | null = null;
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) contentType = "image/jpeg";
+  else if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+    contentType = "image/png";
+  } else if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) {
+    contentType = "image/gif";
+  } else if (
+    buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buffer.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    contentType = "image/webp";
+  }
+  if (!contentType) return null;
+  return { buffer, contentType, ext: extFromContentType(contentType, "png") };
 }
 
 function bufferFromDataUri(
