@@ -25,6 +25,7 @@ import {
 import { db, waitForDatabase } from "./db";
 import { scheduleComicWorker } from "./worker";
 import { aiSettings as aiSettingsTable, comicJobs, creditTransactions } from "../shared/schema";
+import { comicCreditCost, parseComicPageCount } from "../shared/creditCost";
 import { sendVerificationEmail, sendPasswordResetEmail, sendWelcomeEmail } from "./email";
 import { sendPushNotification, sendBroadcastNotification, sendComicCompleteNotification, sendReferralSuccessNotification } from "./notifications";
 import { requeuePayloadAfterStall } from "./comicJobStall";
@@ -1089,6 +1090,7 @@ async function getJobFromDb(jobId: string): Promise<ComicJob | null> {
         pages: stripNonAssetImagesFromComicPagesJson(dbJob.pages || []) as ComicPage[],
         error: dbJob.error || undefined,
         libraryComicId: dbJob.libraryComicId ?? undefined,
+        savedToLibrary: dbJob.status === "completed" && dbJob.libraryComicId != null,
         requestPayload: (dbJob.requestPayload as GenerateComicRequest | null) ?? undefined,
         createdAt: new Date(dbJob.createdAt).getTime(),
       };
@@ -2823,9 +2825,18 @@ export async function refundCreditsForFailedJob(job: ComicJob): Promise<void> {
     if (alreadyRefunded) return;
 
     const settings = await storage.getCreditSettings();
-    const numPages = job.pagesCount ?? 6;
-    const additionalPages = Math.max(0, numPages - 1);
-    const totalCost = settings.baseCost + additionalPages * settings.costPerPage;
+    const charged = (job.requestPayload as { creditsCharged?: unknown } | undefined)?.creditsCharged;
+    const numPages = parseComicPageCount(job.pagesCount);
+    const totalCost =
+      typeof charged === "number" && Number.isFinite(charged) && charged >= 0
+        ? charged
+        : numPages == null
+          ? null
+          : comicCreditCost(settings.baseCost, settings.costPerPage, numPages);
+    if (totalCost == null) {
+      console.error(`Refund skipped for job ${job.id}: page count was not recorded`);
+      return;
+    }
     await storage.updateUserCredits(job.userId, totalCost);
     await storage.recordTransaction(job.userId, totalCost, "comic_refund", description);
     console.log(`Refunded ${totalCost} credits to user ${job.userId} after generation failure`);
@@ -3409,9 +3420,22 @@ KEY PATTERNS TO REPLICATE:
       checkpoint.adaptedOutfits = {};
     }
     
+    // Keep the outline to the page count the user paid for. A 1-page comic is one image.
+    const paidPages = parseComicPageCount(pagesCount) ?? pagesCount;
+    if (Array.isArray(story.pages) && story.pages.length > paidPages) {
+      story.pages = story.pages.slice(0, paidPages);
+    }
+    if (paidPages <= 1 && Array.isArray(story.pages)) {
+      for (const page of story.pages) {
+        if (Array.isArray(page?.panels) && page.panels.length > 1) {
+          page.panels = page.panels.slice(0, 1);
+        }
+      }
+    }
+
     // VALIDATION: Ensure minimum panels per page
     // If AI returned too few panels, expand them by duplicating/splitting scenes
-    const storyPagesCount = story.pages?.length || pagesCount;
+    const storyPagesCount = Math.min(story.pages?.length || paidPages, paidPages);
     for (let i = 0; i < storyPagesCount; i++) {
       const page = story.pages?.[i];
       if (!page) continue;
@@ -3420,7 +3444,7 @@ KEY PATTERNS TO REPLICATE:
       const panels = page.panels || [];
       
       // Define minimum panels per page type
-      const minPanels = pageType === 'cover' ? 1 : 3; // Body and conclusion need at least 3
+      const minPanels = paidPages <= 1 || pageType === "cover" ? 1 : 3;
       
       if (panels.length < minPanels && pageType !== 'cover') {
         console.log(`Page ${i + 1} (${pageType}) has only ${panels.length} panels, expanding to ${minPanels}...`);
@@ -5074,13 +5098,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Calculate credit cost for a comic
   app.get("/api/credits/calculate", async (req: Request, res: Response) => {
     try {
-      const pagesCount = parseInt(req.query.pages as string) || 2;
+      const pagesCount = parseComicPageCount(req.query.pages);
+      if (pagesCount == null) {
+        return res.status(400).json({ error: "Invalid page count" });
+      }
       const settings = await storage.getCreditSettings();
-      
       const baseCost = settings.baseCost;
-      const additionalPages = Math.max(0, pagesCount - 1);
-      const additionalCost = additionalPages * settings.costPerPage;
-      const totalCost = baseCost + additionalCost;
+      const totalCost = comicCreditCost(baseCost, settings.costPerPage, pagesCount);
+      const additionalCost = totalCost - baseCost;
       
       res.json({
         pagesCount,
@@ -5098,7 +5123,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/credits/deduct", requireUserAuth, async (req: Request, res: Response) => {
     try {
       const userId = (req as any).userId;
-      const { pagesCount } = req.body;
+      const pagesCount = parseComicPageCount(req.body?.pagesCount);
+      if (pagesCount == null) {
+        return res.status(400).json({ error: "Invalid page count" });
+      }
       
       const user = await storage.getUser(userId);
       if (!user) {
@@ -5106,10 +5134,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const settings = await storage.getCreditSettings();
-      const baseCost = settings.baseCost;
-      const additionalPages = Math.max(0, pagesCount - 1);
-      const additionalCost = additionalPages * settings.costPerPage;
-      const totalCost = baseCost + additionalCost;
+      const totalCost = comicCreditCost(settings.baseCost, settings.costPerPage, pagesCount);
       
       if (user.credits < totalCost) {
         return res.status(400).json({
@@ -5120,6 +5145,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const updatedUser = await storage.updateUserCredits(userId, -totalCost);
+      if (!updatedUser) {
+        const latest = await storage.getUser(userId);
+        return res.status(400).json({
+          error: "Insufficient credits",
+          required: totalCost,
+          available: latest?.credits ?? 0,
+        });
+      }
       await storage.recordTransaction(userId, -totalCost, "comic_generation", `Generated ${pagesCount}-page comic`);
       
       res.json({
@@ -5988,7 +6021,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         userEmail: user.email,
         action: "rate_limited",
         status: "blocked",
-        pagesCount: pagesCount || 6,
+        pagesCount: parseComicPageCount(pagesCount) ?? undefined,
         style,
         ipAddress,
         userAgent,
@@ -6009,11 +6042,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     }
 
-    // Calculate credit cost
+    // Calculate credit cost. Missing page count must not fall through to a 6-page charge.
     const settings = await storage.getCreditSettings();
-    const numPages = pagesCount || 6;
-    const additionalPages = Math.max(0, numPages - 1);
-    const totalCost = settings.baseCost + (additionalPages * settings.costPerPage);
+    const numPages = parseComicPageCount(pagesCount);
+    if (numPages == null) {
+      return res.status(400).json({ error: "Invalid page count" });
+    }
+    const totalCost = comicCreditCost(settings.baseCost, settings.costPerPage, numPages);
 
     // Check if user has enough credits
     if (user.credits < totalCost) {
@@ -6043,14 +6078,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     }
 
-    // Deduct credits BEFORE starting generation
+    // Deduct credits BEFORE starting generation. The conditional update rejects a second
+    // overlapping charge when the balance cannot cover it.
     const updatedUser = await storage.updateUserCredits(userId, -totalCost);
+    if (!updatedUser) {
+      const latest = await storage.getUser(userId);
+      return res.status(402).json({
+        error: "Insufficient credits",
+        code: "INSUFFICIENT_CREDITS",
+        required: totalCost,
+        available: latest?.credits ?? 0,
+        shortfall: totalCost - (latest?.credits ?? 0),
+      });
+    }
     await storage.recordTransaction(userId, -totalCost, "comic_generation", `Generated ${numPages}-page ${style} comic: ${title || 'Untitled'}`);
     console.log(`Deducted ${totalCost} credits from user ${userId}. New balance: ${updatedUser?.credits}`);
 
     const jobId = crypto.randomUUID();
     const characterNames = (characters || []).map((c) => c.name).filter(Boolean);
-    const requestPayload: GenerateComicRequest = {
+    const requestPayload: GenerateComicRequest & { creditsCharged: number } = {
       storyPrompt,
       style,
       characters: characters || [],
@@ -6058,6 +6104,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       scenesPerPage,
       title,
       language,
+      creditsCharged: totalCost,
     };
     const job: ComicJob = {
       id: jobId,

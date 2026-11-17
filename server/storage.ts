@@ -191,13 +191,18 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateUserCredits(id: string, amount: number): Promise<User | undefined> {
+    const amountIsDeduction = amount < 0;
     const [user] = await db
       .update(users)
       .set({ 
         credits: sql`${users.credits} + ${amount}`,
         updatedAt: sql`CURRENT_TIMESTAMP`
       })
-      .where(eq(users.id, id))
+      .where(
+        amountIsDeduction
+          ? and(eq(users.id, id), sql`${users.credits} + ${amount} >= 0`)
+          : eq(users.id, id),
+      )
       .returning();
     return user || undefined;
   }

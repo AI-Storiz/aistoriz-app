@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { classifyCharacterPhotoInput } from "../shared/characterPhoto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import pLimit from "p-limit";
 
@@ -201,7 +202,8 @@ export function stripNonAssetImagesFromComicPagesJson(pages: unknown): unknown[]
 export async function uploadCharacterPhotoToS3OrThrow(userId: string, imageData: string): Promise<string> {
   assertComicS3Configured();
   const t = (imageData ?? "").trim();
-  if (t.length === 0) {
+  const kind = classifyCharacterPhotoInput(t);
+  if (kind === "empty") {
     return "";
   }
   if (isOnOurStorageHttps(t)) {
@@ -214,12 +216,12 @@ export async function uploadCharacterPhotoToS3OrThrow(userId: string, imageData:
   let contentType: string;
   let ext: string;
 
-  if (t.startsWith("data:")) {
+  if (kind === "data") {
     const decoded = bufferFromDataUri(t);
     body = decoded.buffer;
     contentType = decoded.contentType;
     ext = decoded.ext;
-  } else if (t.startsWith("https://") || t.startsWith("http://")) {
+  } else if (kind === "remote") {
     const res = await fetch(t, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     if (!res.ok) {
       throw new ComicS3Error(

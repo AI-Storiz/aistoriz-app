@@ -1,4 +1,7 @@
 import { getApiUrl } from "@/lib/query-client";
+import { dedupeIdenticalPreviewPages } from "@shared/previewPages";
+
+export { dedupeIdenticalPreviewPages };
 
 /** Shape passed to Preview / export after resolving panel URLs from the API. */
 export interface ComicPreviewPagePayload {
@@ -90,38 +93,7 @@ export async function fetchComicPagesForPreview(
     };
 
     const built = apiPages.map((page, index) => buildPagePayload(page, index));
-
-    const p0 = apiPages[0];
-    const hasMultiPanelFirst = p0 != null && (Number(p0.panelCount) || 0) > 1;
-
-    if (hasMultiPanelFirst) {
-      const raw0 = Array.isArray(p0.panelImages)
-        ? p0.panelImages.map((x: unknown) => (typeof x === "string" ? x.trim() : ""))
-        : [];
-      const firstPanelDirect = storedAssetHttps(raw0[0]);
-      const firstPanelHref = firstPanelDirect || panelImageHref(0, 0);
-      const firstPanel = Array.isArray(p0.panels) ? p0.panels[0] : undefined;
-      const coverRow: ComicPreviewPagePayload = {
-        pageNumber: 0,
-        pageType: "cover",
-        imageUrl: firstPanelHref,
-        panelImages: [firstPanelHref],
-        panels: firstPanel ? [firstPanel] : undefined,
-        scenes: p0.scenes,
-        generationMode: p0.generationMode,
-        serverPageIndex: 0,
-        syntheticCover: true,
-      };
-      const rest = built.map((row, i) => {
-        if (i === 0 && p0.pageType === "cover") {
-          return { ...row, pageType: "body" as const };
-        }
-        return row;
-      });
-      return [coverRow, ...rest];
-    }
-
-    return built;
+    return dedupeIdenticalPreviewPages(built);
   } catch (e) {
     console.warn("fetchComicPagesForPreview failed:", e);
     return null;

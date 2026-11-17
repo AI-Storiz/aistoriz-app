@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { View, StyleSheet, AppState, AppStateStatus, Platform, Dimensions } from "react-native";
+import { View, StyleSheet, AppState, AppStateStatus, Platform, Dimensions, Alert } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -29,6 +29,7 @@ import { ComicBackground } from "@/components/ComicBackground";
 import { getApiUrl } from "@/lib/query-client";
 import { triggerHistoryRefresh } from "@/store";
 import { fetchComicPagesForPreview } from "@/lib/comicPreviewUrls";
+import { dedupeIdenticalPreviewPages } from "@shared/previewPages";
 import { previewPagesAfterImageFailure, type FailedJobStory } from "@/lib/storyFallback";
 import type { RootStackParamList } from "@/navigation/RootStackNavigator";
 
@@ -299,6 +300,8 @@ const devLog: (...args: unknown[]) => void = __DEV__
     }
   : () => {};
 
+let paidGenerationInFlight = false;
+
 /** Prefer server copy; strip noisy technical errors in production. */
 function failedStoryPreview(
   job: { story?: FailedJobStory | null; pages?: any[]; title?: string; error?: string },
@@ -332,7 +335,7 @@ export default function GeneratingScreen() {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<RouteType>();
   const { theme } = useTheme();
-  const { token } = useAuth();
+  const { token, updateCredits } = useAuth();
   
   // Keep screen awake during generation; use explicit tag so we always release on unmount.
   useKeepAwake(GENERATION_KEEP_AWAKE_TAG);
@@ -352,9 +355,12 @@ export default function GeneratingScreen() {
 
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const hasNavigatedRef = useRef(false);
+  const generationStartedRef = useRef(false);
   const appState = useRef(AppState.currentState);
 
   useEffect(() => {
+    if (generationStartedRef.current) return;
+    generationStartedRef.current = true;
     startGeneration();
 
     // Listen for app state changes to continue polling when app comes back
@@ -398,6 +404,8 @@ export default function GeneratingScreen() {
   };
 
   const startGeneration = async () => {
+    if (paidGenerationInFlight) return;
+    paidGenerationInFlight = true;
     const { storyPrompt, style, characters, pagesCount, scenesPerPage, title, language } = route.params;
 
     // Reset navigation guard for new generation
@@ -446,8 +454,17 @@ export default function GeneratingScreen() {
           try {
             const errorData = await response.json();
             if (errorData.code === "INSUFFICIENT_CREDITS") {
-              setInsufficientCredits(true);
               setIsGenerating(false);
+              const available = typeof errorData.available === "number" ? errorData.available : 0;
+              if (available <= 0) {
+                Alert.alert(
+                  "Credits used up",
+                  "Your credits are used up. Credit renewal and subscription features are coming soon.",
+                  [{ text: "OK", onPress: () => navigation.goBack() }],
+                );
+                return;
+              }
+              setInsufficientCredits(true);
               return;
             }
           } catch (e) {
@@ -463,7 +480,11 @@ export default function GeneratingScreen() {
         throw new Error("Failed to start comic generation");
       }
 
-      const { jobId: newJobId } = await response.json();
+      const started = await response.json();
+      const newJobId = started.jobId as string;
+      if (typeof started.newBalance === "number") {
+        updateCredits(started.newBalance);
+      }
       setJobId(newJobId);
 
       // Save job ID so we can resume if app is closed
@@ -475,6 +496,8 @@ export default function GeneratingScreen() {
       setError(err.message || "Something went wrong. Please try again.");
       setIsGenerating(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      paidGenerationInFlight = false;
     }
   };
 
@@ -531,15 +554,19 @@ export default function GeneratingScreen() {
 
       if (!response.ok) {
         if (response.status === 404) {
-          // Job not found - this shouldn't happen with fresh generation
-          // Clear saved job and restart generation
-          await AsyncStorage.removeItem("current_job_id");
+          // A missing job must not start another paid generation.
+          retryCountRef.current++;
+          if (retryCountRef.current < 5) {
+            devLog("Job not found yet, retrying status check...");
+            return;
+          }
           if (pollIntervalRef.current) {
             clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
           }
-          // Retry the generation automatically
-          devLog("Job not found, restarting generation...");
-          setTimeout(() => startGeneration(), 1000);
+          await AsyncStorage.removeItem("current_job_id");
+          setError("We couldn't find this comic job. Please try again.");
+          setIsGenerating(false);
           return;
         }
         const errorText = await response.text().catch(() => "");
@@ -591,7 +618,8 @@ export default function GeneratingScreen() {
         const comicTitle = job.title || route.params.title || "My Comic";
 
         // Check if server already auto-saved this comic
-        const serverSaved = job.savedToLibrary === true;
+        const serverSaved =
+          job.savedToLibrary === true || typeof job.libraryComicId === "number";
         devLog(`Comic completion - server saved: ${serverSaved}`);
 
         let comicIdForPreviewUrls: number | undefined =
@@ -642,7 +670,7 @@ export default function GeneratingScreen() {
           }
         }
 
-        let pagesForPreview = job.pages;
+        let pagesForPreview = dedupeIdenticalPreviewPages(job.pages || []);
         if (token && comicIdForPreviewUrls != null) {
           const urlPages = await fetchComicPagesForPreview(String(comicIdForPreviewUrls), token);
           if (urlPages && urlPages.length > 0) {
@@ -842,7 +870,7 @@ export default function GeneratingScreen() {
             type="body"
             style={[styles.message, { color: theme.textSecondary }]}
           >
-            You need more credits to generate this comic. Get more credits to continue creating amazing stories!
+            Your balance is too low for this comic. Invite a friend from your profile to earn more credits. Ad rewards are coming in a future update.
           </ThemedText>
           <View style={styles.buttonColumn}>
             <Button
@@ -859,22 +887,6 @@ export default function GeneratingScreen() {
               testID="button-get-credits"
             >
               Get More Credits
-            </Button>
-            <Button
-              variant="outline"
-              onPress={() => {
-                navigation.reset({
-                  index: 0,
-                  routes: [{ name: "Main" }],
-                });
-                setTimeout(() => {
-                  navigation.navigate("EarnCredits" as any);
-                }, 100);
-              }}
-              style={styles.wideButton}
-              testID="button-earn-free"
-            >
-              Earn Free Credits
             </Button>
             <Button
               variant="outline"

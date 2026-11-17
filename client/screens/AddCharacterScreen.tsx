@@ -12,6 +12,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import { HeaderButton } from "@react-navigation/elements";
 import * as ImagePicker from "expo-image-picker";
+import * as ImageManipulator from "expo-image-manipulator";
+import { readAsStringAsync, EncodingType } from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import { Feather } from "@expo/vector-icons";
@@ -95,9 +97,37 @@ export default function AddCharacterScreen() {
     }
   };
 
+  const uploadCharacterPhoto = async (localUri: string): Promise<string> => {
+    const manipulated = await ImageManipulator.manipulateAsync(
+      localUri,
+      [{ resize: { width: 1024 } }],
+      { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG },
+    );
+    const base64 = await readAsStringAsync(manipulated.uri, {
+      encoding: EncodingType.Base64,
+    });
+    const response = await fetch(new URL("/api/character-photos", getApiUrl()).toString(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ photoUri: `data:image/jpeg;base64,${base64}` }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || typeof payload.url !== "string" || !payload.url.trim()) {
+      throw new Error(payload.error || "Failed to upload character photo");
+    }
+    return payload.url.trim();
+  };
+
   const handleSave = async () => {
     if (!name.trim() || !gender) {
       Alert.alert("Missing Info", "Please enter a name and select a type.");
+      return;
+    }
+    if (!token) {
+      Alert.alert("Error", "Please log in again, then save the character.");
       return;
     }
 
@@ -105,7 +135,14 @@ export default function AddCharacterScreen() {
     setIsSaving(true);
 
     try {
-      // Save to database API
+      let photoUri: string | null = null;
+      if (imageUri) {
+        photoUri =
+          imageUri.startsWith("https://") || imageUri.startsWith("http://")
+            ? imageUri
+            : await uploadCharacterPhoto(imageUri);
+      }
+
       const response = await fetch(new URL("/api/characters", getApiUrl()).toString(), {
         method: "POST",
         headers: {
@@ -114,15 +151,19 @@ export default function AddCharacterScreen() {
         },
         body: JSON.stringify({
           name: name.trim(),
-          photoUri: imageUri || null,
+          photoUri,
         }),
       });
 
       if (!response.ok) {
-        throw new Error("Failed to save character to server");
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || "Failed to save character to server");
       }
 
       const { character } = await response.json();
+      if (!character?.id) {
+        throw new Error("Character was not returned by the server");
+      }
       
       // Store the newly added character ID for auto-selection
       await AsyncStorage.setItem("newlyAddedCharacterId", character.id.toString());

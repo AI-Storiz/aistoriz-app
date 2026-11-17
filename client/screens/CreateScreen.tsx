@@ -28,6 +28,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { getApiUrl } from "@/lib/query-client";
+import { comicCreditCost, parseComicPageCount } from "@shared/creditCost";
 import { CharacterSelectionModal } from "@/components/CharacterSelectionModal";
 import FooterTextAd from "@/components/FooterTextAd";
 import type { RootStackParamList } from "@/navigation/RootStackNavigator";
@@ -382,10 +383,19 @@ export default function CreateScreen() {
     if (!selectedLockedStyle) return;
     const cost = selectedLockedStyle.unlockCost;
     const balance = user?.credits ?? 0;
+    if (balance <= 0) {
+      setShowUnlockModal(false);
+      Alert.alert(
+        "Credits used up",
+        "Your credits are used up. Credit renewal and subscription features are coming soon.",
+      );
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
     if (balance < cost) {
       setShowUnlockModal(false);
       setResultSuccess(false);
-      setResultMessage(`You need ${cost} credits but only have ${balance}. Please top up your credits first.`);
+      setResultMessage(`You need ${cost} credits but only have ${balance}. Your balance is too low. Invite a friend from your profile to earn more credits. Ad rewards are coming in a future update.`);
       setShowResultModal(true);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       return;
@@ -398,10 +408,19 @@ export default function CreateScreen() {
   const handleUnlockAll = () => {
     const cost = unlockAllCost;
     const balance = user?.credits ?? 0;
+    if (balance <= 0) {
+      setShowUnlockModal(false);
+      Alert.alert(
+        "Credits used up",
+        "Your credits are used up. Credit renewal and subscription features are coming soon.",
+      );
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
     if (balance < cost) {
       setShowUnlockModal(false);
       setResultSuccess(false);
-      setResultMessage(`You need ${cost} credits but only have ${balance}. Please top up your credits first.`);
+      setResultMessage(`You need ${cost} credits but only have ${balance}. Your balance is too low. Invite a friend from your profile to earn more credits. Ad rewards are coming in a future update.`);
       setShowResultModal(true);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       return;
@@ -566,12 +585,53 @@ export default function CreateScreen() {
   };
 
   const calculateCost = () => {
-    return creditBase + Math.max(0, pagesCount - 1) * creditPerPage;
+    const pages = parseComicPageCount(pagesCount) ?? 1;
+    return comicCreditCost(creditBase, creditPerPage, pages);
   };
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     if (!storyPrompt.trim()) {
       Alert.alert("Missing Story", "Please enter a story prompt to continue.");
+      return;
+    }
+
+    const pages = parseComicPageCount(pagesCount);
+    if (pages == null) {
+      Alert.alert("Pages", "Choose a page count before generating.");
+      return;
+    }
+
+    let balance = user?.credits ?? 0;
+    if (token) {
+      try {
+        const me = await fetch(new URL("/api/auth/me", getApiUrl()).toString(), {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (me.ok) {
+          const fresh = await me.json();
+          if (typeof fresh.credits === "number") {
+            balance = fresh.credits;
+            updateCredits(fresh.credits);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to refresh credit balance:", error);
+      }
+    }
+
+    const cost = comicCreditCost(creditBase, creditPerPage, pages);
+    if (balance <= 0) {
+      Alert.alert(
+        "Credits used up",
+        "Your credits are used up. Credit renewal and subscription features are coming soon.",
+      );
+      return;
+    }
+    if (balance < cost) {
+      Alert.alert(
+        "Not Enough Credits",
+        `This comic costs ${cost} credits and your balance is ${balance}.`,
+      );
       return;
     }
 
@@ -585,7 +645,7 @@ export default function CreateScreen() {
         imageUri: c.imageUri,
         description: c.description,
       })),
-      pagesCount,
+      pagesCount: pages,
       scenesPerPage: 6,
       title: undefined,
       language: selectedLanguage === "Detect" ? undefined : selectedLanguage,

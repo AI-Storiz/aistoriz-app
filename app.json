@@ -2,7 +2,7 @@
   "expo": {
     "name": "AI Storiz",
     "slug": "ai-storiz",
-    "version": "1.0",
+    "version": "1.0.4",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "aistoriz",
@@ -23,14 +23,20 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.ai.stories.ai",
-      "versionCode": 1,
+      "versionCode": 5,
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.VIBRATE"
+      ],
+      "blockedPermissions": [
         "android.permission.CAMERA",
-        "android.permission.VIBRATE",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_MEDIA_AUDIO",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.RECEIVE_BOOT_COMPLETED"
       ]
     },
     "web": {
@@ -61,17 +67,9 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "AI Storiz needs access to your photos so you can add character pictures for your comics.",
-          "cameraPermission": "AI Storiz needs camera access to take a character photo for your comics."
+          "photosPermission": "AI Storiz needs access to your photos so you can add character pictures for your comics."
         }
       ],
-      [
-        "react-native-google-mobile-ads",
-        {
-          "androidAppId": "ca-app-pub-3940256099942544~3347511713",
-          "iosAppId": "ca-app-pub-3940256099942544~1458002511"
-        }
-      ]
     ],
     "experiments": {
       "reactCompiler": true
